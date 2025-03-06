@@ -1,0 +1,78 @@
+// ADXL335 calibration and acceleration test
+
+// Define axis pins
+#define X_PIN A0
+#define Y_PIN A1
+#define Z_PIN A2
+
+int Xread = 0;
+int Yread = 0;
+int Zread = 0;
+double z_acc = 0;
+
+// Calibration variables
+#define readings 100
+int Z_calib[readings];
+long Z_calib_sum;
+int Z_calib_value = 0; // Initial offset for Z-axis
+
+// Key to trigger calibration
+boolean key = false; // Set to true if you don’t want auto-calibration at start
+
+void setup()
+{
+  Serial.begin(9600);
+  
+  // Auto-calibrate at startup
+  calibrate();
+}
+
+void loop()
+{
+  if (!key)
+  {
+    calibrate(); // Perform calibration
+    key = true;  // Prevent recalibration unless reset
+  }
+  else
+  {
+    // Read values from the sensor
+    Xread = analogRead(X_PIN);
+    Yread = analogRead(Y_PIN);
+    Zread = analogRead(Z_PIN);
+
+    // Apply calibration offset to Z-axis
+    z_acc = -(((Zread - Z_calib_value) * 9.81) / 330.0);
+
+    // Print all values for debugging
+    Serial.print("X: "); Serial.print(Xread);
+    Serial.print(" | Y: "); Serial.print(Yread);
+    Serial.print(" | Z: "); Serial.print(Zread);
+    Serial.print(" | Z-ACC (m/s²): "); Serial.println(z_acc);
+
+    delay(100);
+  }
+}
+
+void calibrate()
+{
+  Z_calib_sum = 0; // Reset sum
+
+  // Read multiple values for averaging
+  for (int i = 0; i < readings; i++)
+  {
+    Z_calib[i] = analogRead(Z_PIN);
+    delay(1);
+  }
+
+  // Calculate the average
+  for (int i = 0; i < readings; i++)
+  {
+    Z_calib_sum += Z_calib[i];
+  }
+
+  Z_calib_value = Z_calib_sum / readings; // Store new calibration value
+
+  Serial.print("Calibration Done. Offset: ");
+  Serial.println(Z_calib_value);
+}

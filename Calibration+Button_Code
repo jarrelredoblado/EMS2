@@ -1,0 +1,168 @@
+#include <LiquidCrystal.h>
+
+// Pin definitions
+const int BUTTON_PIN = 2;    // GPIO pin for calibration button (interrupt-capable)
+const int ST_PIN = 2;        // Self-test pin for ADXL335
+const int X_PIN = A0;        // Analog pin for X-axis
+const int Y_PIN = A1;        // Analog pin for Y-axis
+const int Z_PIN = A2;        // Analog pin for Z-axis
+
+// LCD pin definitions (adjust as needed)
+const int LCD_RS = 12;
+const int LCD_EN = 11;
+const int LCD_D4 = 5;
+const int LCD_D5 = 4;
+const int LCD_D6 = 6;
+const int LCD_D7 = 7;
+
+// Calibration constants
+const float GRAVITY = 1.0;   // 1G reference
+const int SAMPLE_DELAY = 100; // Delay between samples in ms
+const int DEBOUNCE_DELAY = 50; // Button debounce delay in ms
+const int CALIBRATION_DELAY = 2000; // Delay after button press
+
+// Calibration data structure
+struct AxisCalibration {
+    float xPlus, xMinus;
+    float yPlus, yMinus;
+    float zPlus, zMinus;
+};
+
+// Global variables
+AxisCalibration calData;
+volatile bool calibrateFlag = false;
+unsigned long lastDebounceTime = 0;
+
+// Initialize LCD object
+LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
+
+// Interrupt service routine
+void buttonISR() {
+    unsigned long currentTime = millis();
+    if (currentTime - lastDebounceTime > DEBOUNCE_DELAY) {
+        calibrateFlag = true;
+        lastDebounceTime = currentTime;
+    }
+}
+
+// Read and average analog values
+float readAxisAverage(int pin, int samples = 10) {
+    long sum = 0;
+    for (int i = 0; i < samples; i++) {
+        sum += analogRead(pin);
+        delay(SAMPLE_DELAY / samples);
+    }
+    // Convert ADC reading to voltage with 3V external reference
+    return (float)sum / samples * (3.0 / 1023.0);
+}
+
+// Display message on LCD
+void displayLCD(String line1, String line2 = "") {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(line1);
+    if (line2 != "") {
+        lcd.setCursor(0, 1);
+        lcd.print(line2);
+    }
+    Serial.println(line1);  // Debug output
+    if (line2 != "") Serial.println(line2);
+}
+
+// Calibration routine
+void calibrateAccelerometer() {
+    displayLCD("Calibration", "in 2 seconds");
+    delay(CALIBRATION_DELAY);
+    
+    displayLCD("Calibration", "Starting");
+    delay(1000);
+    
+    String orientations[6] = {
+        "+X up",
+        "-X up",
+        "+Y up",
+        "-Y up",
+        "+Z up",
+        "-Z up"
+    };
+    
+    float readings[6];
+    
+    for (int i = 0; i < 6; i++) {
+        displayLCD("Position:", orientations[i]);
+        delay(2000);  // Time to orient
+        
+        switch(i) {
+            case 0: readings[i] = readAxisAverage(X_PIN); break;
+            case 1: readings[i] = readAxisAverage(X_PIN); break;
+            case 2: readings[i] = readAxisAverage(Y_PIN); break;
+            case 3: readings[i] = readAxisAverage(Y_PIN); break;
+            case 4: readings[i] = readAxisAverage(Z_PIN); break;
+            case 5: readings[i] = readAxisAverage(Z_PIN); break;
+        }
+        
+        displayLCD(orientations[i], String(readings[i], 3) + "V");
+        delay(1000);
+    }
+    
+    // Store calibration data
+    calData.xPlus = readings[0];
+    calData.xMinus = readings[1];
+    calData.yPlus = readings[2];
+    calData.yMinus = readings[3];
+    calData.zPlus = readings[4];
+    calData.zMinus = readings[5];
+    
+    // Self-test
+    digitalWrite(ST_PIN, HIGH);
+    delay(100);
+    
+    float xTest = readAxisAverage(X_PIN);
+    float yTest = readAxisAverage(Y_PIN);
+    float zTest = readAxisAverage(Z_PIN);
+    
+    digitalWrite(ST_PIN, LOW);
+    
+    // Verify self-test (Vs=3V)
+    bool testPass = abs(xTest - calData.xPlus - (-0.325)) < 0.1 &&
+                    abs(yTest - calData.yPlus - 0.325) < 0.1 &&
+                    abs(zTest - calData.zPlus - 0.550) < 0.1;
+    
+    if (testPass) {
+        displayLCD("Calibration", "Successful");
+    } else {
+        displayLCD("Calibration", "Failed");
+    }
+    delay(2000);
+}
+
+void setup() {
+    // Initialize pins
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
+    pinMode(ST_PIN, OUTPUT);
+    pinMode(X_PIN, INPUT);
+    pinMode(Y_PIN, INPUT);
+    pinMode(Z_PIN, INPUT);
+    
+    digitalWrite(ST_PIN, LOW);
+    
+    // Set external reference for AREF pin (3V assumed)
+    analogReference(EXTERNAL);
+    
+    // Initialize Serial and LCD
+    Serial.begin(9600);
+    lcd.begin(16, 2);
+    
+    // Attach interrupt
+    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
+    
+    displayLCD("System Ready");
+}
+
+void loop() {
+    if (calibrateFlag) {
+        calibrateAccelerometer();
+        calibrateFlag = false;
+    }
+    // Add other routines here
+}

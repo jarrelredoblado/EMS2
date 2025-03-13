@@ -1,0 +1,87 @@
+// Self-Test Function
+bool selfTestAccelerometer() {
+    displayLCD("Self-Test", "Running...");
+    delay(1000);
+
+    digitalWrite(ST_PIN, HIGH); // Enable self-test
+    delay(100);
+    
+    float xTest = readAxisAverage(X_PIN);
+    float yTest = readAxisAverage(Y_PIN);
+    float zTest = readAxisAverage(Z_PIN);
+    
+    digitalWrite(ST_PIN, LOW); // Disable self-test
+
+    // Verify self-test (expected changes based on ADXL335 datasheet)
+    bool testPass = abs(xTest - calData.xPlus - (-0.325)) < 0.1 &&
+                    abs(yTest - calData.yPlus - 0.325) < 0.1 &&
+                    abs(zTest - calData.zPlus - 0.550) < 0.1;
+
+    if (testPass) {
+        displayLCD("Self-Test", "Passed");
+        delay(2000);
+        return true;
+    } else {
+        displayLCD("Self-Test", "Failed");
+        delay(2000);
+        return false;
+    }
+}
+
+// Calibration routine
+void calibrateAccelerometer() {
+    displayLCD("Calibration", "Press button");
+    delay(1000);
+
+    // Run Self-Test First
+    bool selfTestResult = selfTestAccelerometer();
+    if (!selfTestResult) {
+        displayLCD("Self-Test", "Check Sensor!");
+        return; // Stop calibration if self-test fails
+    }
+
+    String orientations[6] = {
+        "+X up",
+        "-X up",
+        "+Y up",
+        "-Y up",
+        "+Z up",
+        "-Z up"
+    };
+    
+    float readings[6];
+
+    // Disable interrupt during calibration
+    detachInterrupt(digitalPinToInterrupt(BUTTON_PIN));
+
+    for (int i = 0; i < 6; i++) {
+        displayLCD("Position:", orientations[i]);
+        waitForButtonPress(); // Wait for user input before measuring
+        
+        switch(i) {
+            case 0: readings[i] = readAxisAverage(X_PIN); break;
+            case 1: readings[i] = readAxisAverage(X_PIN); break;
+            case 2: readings[i] = readAxisAverage(Y_PIN); break;
+            case 3: readings[i] = readAxisAverage(Y_PIN); break;
+            case 4: readings[i] = readAxisAverage(Z_PIN); break;
+            case 5: readings[i] = readAxisAverage(Z_PIN); break;
+        }
+        
+        displayLCD(orientations[i], String(readings[i], 3) + "V");
+        waitForButtonPress(); // Wait for user to confirm before proceeding
+    }
+
+    // Store calibration data
+    calData.xPlus = readings[0];
+    calData.xMinus = readings[1];
+    calData.yPlus = readings[2];
+    calData.yMinus = readings[3];
+    calData.zPlus = readings[4];
+    calData.zMinus = readings[5];
+
+    displayLCD("Calibration", "Complete");
+    delay(2000);
+
+    // Re-enable interrupt after calibration
+    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
+}

@@ -74,8 +74,8 @@ void waitForButtonPress() {
 void selfTest() {
     if (!selfTestAccelerometer()) {
       displayLCD("Self-Test", "Check Sensor!");
-      return;
-  }
+      while (1); // Stop execution if self-test fails
+    }
 }
 
 void calibrateAccelerometer() {

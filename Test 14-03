@@ -43,7 +43,7 @@ bool selfTestAccelerometer() {
     delay(1000);
 
     digitalWrite(ST_PIN, HIGH); // Enable self-test
-    delay(100);
+    delay(500);
     
     float xTest = readAxisAverage(X_PIN);
     float yTest = readAxisAverage(Y_PIN);
@@ -73,14 +73,17 @@ void waitForButtonPress() {
     delay(300);
 }
 
+void selfTest() {
+    if (!selfTestAccelerometer()) {
+      displayLCD("Self-Test", "Check Sensor!");
+      return;
+  }
+}
+
 void calibrateAccelerometer() {
     displayLCD("Calibration", "Press Button");
     waitForButtonPress();
 
-    if (!selfTestAccelerometer()) {
-        displayLCD("Self-Test", "Check Sensor!");
-        return;
-    }
 
     String orientations[6] = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"};
     float readings[6];
@@ -145,6 +148,7 @@ void setup() {
     lcd.backlight();
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     pinMode(ST_PIN, OUTPUT);
+    selfTest();
     calibrateAccelerometer();
 }
 

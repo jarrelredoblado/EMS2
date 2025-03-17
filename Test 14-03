@@ -1,12 +1,43 @@
 #include <LiquidCrystal_I2C.h>
 
-// Initialize the LCD (16x2) with I2C address 0x27
+// LCD Initialization (16x2) with I2C address 0x27
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-//button is pin 4
+// Define Pins
+#define X_PIN A0
+#define Y_PIN A1
+#define Z_PIN A2
+#define BUTTON_PIN 4
+#define ST_PIN 5  // Self-Test Pin
 
+// Calibration Data Structure
+struct CalibrationData {
+    float xPlus, xMinus;
+    float yPlus, yMinus;
+    float zPlus, zMinus;
+} calData;
 
-// Self-Test Function
+bool key = false;
+long X_calib = 0, Y_calib = 0, Z_calib = 0;
+const int numReadings = 50;
+
+void displayLCD(String line1, String line2) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(line1);
+    lcd.setCursor(0, 1);
+    lcd.print(line2);
+}
+
+float readAxisAverage(int pin) {
+    long sum = 0;
+    for (int i = 0; i < numReadings; i++) {
+        sum += analogRead(pin);
+        delay(1);
+    }
+    return (float)sum / numReadings * (5.0 / 1023.0); // Convert to voltage
+}
+
 bool selfTestAccelerometer() {
     displayLCD("Self-Test", "Running...");
     delay(1000);
@@ -20,10 +51,9 @@ bool selfTestAccelerometer() {
     
     digitalWrite(ST_PIN, LOW); // Disable self-test
 
-    // Verify self-test (expected changes based on ADXL335 datasheet)
-    bool testPass = abs(xTest - calData.xPlus - (-0.325)) < 0.1 &&
-                    abs(yTest - calData.yPlus - 0.325) < 0.1 &&
-                    abs(zTest - calData.zPlus - 0.550) < 0.1;
+    bool testPass = abs(xTest - (-0.325)) < 0.1 &&
+                    abs(yTest - (0.325)) < 0.1 &&
+                    abs(zTest - (0.550)) < 0.1;
 
     if (testPass) {
         displayLCD("Self-Test", "Passed");
@@ -36,50 +66,33 @@ bool selfTestAccelerometer() {
     }
 }
 
-// Calibration routine
-void calibrateAccelerometer() {
-    displayLCD("Calibration", "Press button");
-    delay(1000);
+void waitForButtonPress() {
+    while (digitalRead(BUTTON_PIN) == HIGH);
+    delay(300);
+    while (digitalRead(BUTTON_PIN) == LOW);
+    delay(300);
+}
 
-    // Run Self-Test First
-    bool selfTestResult = selfTestAccelerometer();
-    if (!selfTestResult) {
+void calibrateAccelerometer() {
+    displayLCD("Calibration", "Press Button");
+    waitForButtonPress();
+
+    if (!selfTestAccelerometer()) {
         displayLCD("Self-Test", "Check Sensor!");
-        return; // Stop calibration if self-test fails
+        return;
     }
 
-    String orientations[6] = {
-        "+X up",
-        "-X up",
-        "+Y up",
-        "-Y up",
-        "+Z up",
-        "-Z up"
-    };
-    
+    String orientations[6] = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"};
     float readings[6];
-
-    // Disable interrupt during calibration
-    detachInterrupt(digitalPinToInterrupt(BUTTON_PIN));
 
     for (int i = 0; i < 6; i++) {
         displayLCD("Position:", orientations[i]);
-        waitForButtonPress(); // Wait for user input before measuring
-        
-        switch(i) {
-            case 0: readings[i] = readAxisAverage(X_PIN); break;
-            case 1: readings[i] = readAxisAverage(X_PIN); break;
-            case 2: readings[i] = readAxisAverage(Y_PIN); break;
-            case 3: readings[i] = readAxisAverage(Y_PIN); break;
-            case 4: readings[i] = readAxisAverage(Z_PIN); break;
-            case 5: readings[i] = readAxisAverage(Z_PIN); break;
-        }
-        
+        waitForButtonPress();
+        readings[i] = readAxisAverage(i < 2 ? X_PIN : (i < 4 ? Y_PIN : Z_PIN));
         displayLCD(orientations[i], String(readings[i], 3) + "V");
-        waitForButtonPress(); // Wait for user to confirm before proceeding
+        waitForButtonPress();
     }
 
-    // Store calibration data
     calData.xPlus = readings[0];
     calData.xMinus = readings[1];
     calData.yPlus = readings[2];
@@ -89,91 +102,52 @@ void calibrateAccelerometer() {
 
     displayLCD("Calibration", "Complete");
     delay(2000);
-
-    // Re-enable interrupt after calibration
-    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
 }
 
+void displayAccelerometerValues() {
+    float x_acc = ((analogRead(X_PIN) - X_calib) * 9.81) / 330.0;
+    float y_acc = ((analogRead(Y_PIN) - Y_calib) * 9.81) / 330.0;
+    float z_acc = ((analogRead(Z_PIN) - Z_calib) * 9.81) / 330.0;
 
-void setup() {
-  Serial.begin(9600);  // Set Serial Monitor to 9600 baud
-
-  // Initialize LCD
-  lcd.init();
-  lcd.backlight();
-  
-  // Print initial text on LCD
-  lcd.setCursor(0, 0);
-  lcd.print("ADXL Values:");
-
-  // Calibrate accelerometer
-  calibrate();
-}
-
-
-oid loop() {
-  if (!key) {
-    calibrate();
-    key = true;
-  } else {
-    // Read values from ADXL335
-    Xread = analogRead(X_PIN);
-    Yread = analogRead(Y_PIN);
-    Zread = analogRead(Z_PIN);
-
-    // Convert to acceleration (m/sÂ²)
-    x_acc = ((Xread - X_calib) * 9.81) / 330.0;
-    y_acc = ((Yread - Y_calib) * 9.81) / 330.0;
-    z_acc = ((Zread - Z_calib) * 9.81) / 330.0;
-
-    // Print values to Serial Monitor (for debugging)
-    Serial.print("X: "); Serial.print(x_acc, 2);
-    Serial.print(" | Y: "); Serial.print(y_acc, 2);
-    Serial.print(" | Z: "); Serial.println(z_acc, 2);
-
-    // Display values on LCD
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("X:"); lcd.print(x_acc, 2);
+    lcd.setCursor(8, 0);
+    lcd.print("Y:"); lcd.print(y_acc, 2);
     lcd.setCursor(0, 1);
-    lcd.print("X:");
-    lcd.setCursor(2, 1);
-    lcd.print(x_acc, 2);
-    lcd.print("  "); // Extra spaces to clear old data
-
-    lcd.setCursor(8, 1);
-    lcd.print("Y:");
-    lcd.setCursor(10, 1);
-    lcd.print(y_acc, 2);
-    lcd.print("  ");
-
-    lcd.setCursor(0, 2);
-    lcd.print("Z:");
-    lcd.setCursor(2, 2);
-    lcd.print(z_acc, 2);
-    lcd.print("  ");
-
+    lcd.print("Z:"); lcd.print(z_acc, 2);
     delay(100);
-  }
 }
 
 void calibrate() {
-  long X_sum = 0, Y_sum = 0, Z_sum = 0;
+    long X_sum = 0, Y_sum = 0, Z_sum = 0;
 
-  // Take multiple readings for averaging
-  for (int i = 0; i < readings; i++) {
-    X_sum += analogRead(X_PIN);
-    Y_sum += analogRead(Y_PIN);
-    Z_sum += analogRead(Z_PIN);
-    delay(1);
-  }
+    for (int i = 0; i < numReadings; i++) {
+        X_sum += analogRead(X_PIN);
+        Y_sum += analogRead(Y_PIN);
+        Z_sum += analogRead(Z_PIN);
+        delay(1);
+    }
 
-  // Store calibration offsets
-  X_calib = X_sum / readings;
-  Y_calib = Y_sum / readings;
-  Z_calib = Z_sum / readings;
+    X_calib = X_sum / numReadings;
+    Y_calib = Y_sum / numReadings;
+    Z_calib = Z_sum / numReadings;
 
-  Serial.println("Calibration Done:");
-  Serial.print("X: "); Serial.print(X_calib);
-  Serial.print(" | Y: "); Serial.print(Y_calib);
-  Serial.print(" | Z: "); Serial.println(Z_calib);
+    Serial.println("Calibration Done:");
+    Serial.print("X: "); Serial.print(X_calib);
+    Serial.print(" | Y: "); Serial.print(Y_calib);
+    Serial.print(" | Z: "); Serial.println(Z_calib);
 }
 
+void setup() {
+    Serial.begin(9600);
+    lcd.init();
+    lcd.backlight();
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
+    pinMode(ST_PIN, OUTPUT);
+    calibrateAccelerometer();
+}
 
+void loop() {
+    displayAccelerometerValues();
+}

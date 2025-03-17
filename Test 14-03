@@ -1,3 +1,11 @@
+#include <LiquidCrystal_I2C.h>
+
+// Initialize the LCD (16x2) with I2C address 0x27
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+//button is pin 4
+
+
 // Self-Test Function
 bool selfTestAccelerometer() {
     displayLCD("Self-Test", "Running...");
@@ -85,3 +93,87 @@ void calibrateAccelerometer() {
     // Re-enable interrupt after calibration
     attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
 }
+
+
+void setup() {
+  Serial.begin(9600);  // Set Serial Monitor to 9600 baud
+
+  // Initialize LCD
+  lcd.init();
+  lcd.backlight();
+  
+  // Print initial text on LCD
+  lcd.setCursor(0, 0);
+  lcd.print("ADXL Values:");
+
+  // Calibrate accelerometer
+  calibrate();
+}
+
+
+oid loop() {
+  if (!key) {
+    calibrate();
+    key = true;
+  } else {
+    // Read values from ADXL335
+    Xread = analogRead(X_PIN);
+    Yread = analogRead(Y_PIN);
+    Zread = analogRead(Z_PIN);
+
+    // Convert to acceleration (m/sÂ²)
+    x_acc = ((Xread - X_calib) * 9.81) / 330.0;
+    y_acc = ((Yread - Y_calib) * 9.81) / 330.0;
+    z_acc = ((Zread - Z_calib) * 9.81) / 330.0;
+
+    // Print values to Serial Monitor (for debugging)
+    Serial.print("X: "); Serial.print(x_acc, 2);
+    Serial.print(" | Y: "); Serial.print(y_acc, 2);
+    Serial.print(" | Z: "); Serial.println(z_acc, 2);
+
+    // Display values on LCD
+    lcd.setCursor(0, 1);
+    lcd.print("X:");
+    lcd.setCursor(2, 1);
+    lcd.print(x_acc, 2);
+    lcd.print("  "); // Extra spaces to clear old data
+
+    lcd.setCursor(8, 1);
+    lcd.print("Y:");
+    lcd.setCursor(10, 1);
+    lcd.print(y_acc, 2);
+    lcd.print("  ");
+
+    lcd.setCursor(0, 2);
+    lcd.print("Z:");
+    lcd.setCursor(2, 2);
+    lcd.print(z_acc, 2);
+    lcd.print("  ");
+
+    delay(100);
+  }
+}
+
+void calibrate() {
+  long X_sum = 0, Y_sum = 0, Z_sum = 0;
+
+  // Take multiple readings for averaging
+  for (int i = 0; i < readings; i++) {
+    X_sum += analogRead(X_PIN);
+    Y_sum += analogRead(Y_PIN);
+    Z_sum += analogRead(Z_PIN);
+    delay(1);
+  }
+
+  // Store calibration offsets
+  X_calib = X_sum / readings;
+  Y_calib = Y_sum / readings;
+  Z_calib = Z_sum / readings;
+
+  Serial.println("Calibration Done:");
+  Serial.print("X: "); Serial.print(X_calib);
+  Serial.print(" | Y: "); Serial.print(Y_calib);
+  Serial.print(" | Z: "); Serial.println(Z_calib);
+}
+
+

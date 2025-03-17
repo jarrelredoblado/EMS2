@@ -12,7 +12,9 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // Calibration Data Structure
 struct CalibrationData {
-    float xOffset, yOffset, zOffset;
+    float xPlus, xMinus;
+    float yPlus, yMinus;
+    float zPlus, zMinus;
 } calData;
 
 bool key = false;
@@ -82,29 +84,32 @@ void calibrateAccelerometer() {
     displayLCD("Calibration", "Press Button");
     waitForButtonPress();
 
-    String orientations[3] = {"X", "Y", "Z"};
-    float readings[3];
+    String orientations[6] = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"};
+    float readings[6];
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 6; i++) {
         displayLCD("Calibrating", orientations[i] + " Axis");
         waitForButtonPress();
-        readings[i] = readAxisAverage(i == 0 ? X_PIN : (i == 1 ? Y_PIN : Z_PIN));
+        readings[i] = readAxisAverage(i < 2 ? X_PIN : (i < 4 ? Y_PIN : Z_PIN));
         displayLCD(orientations[i] + " Offset", "Set to 0");
         waitForButtonPress();
     }
 
-    calData.xOffset = readings[0];
-    calData.yOffset = readings[1];
-    calData.zOffset = readings[2];
+    calData.xPlus = readings[0];
+    calData.xMinus = readings[1];
+    calData.yPlus = readings[2];
+    calData.yMinus = readings[3];
+    calData.zPlus = readings[4];
+    calData.zMinus = readings[5];
 
     displayLCD("Calibration", "Complete");
     delay(2000);
 }
 
 void displayAccelerometerValues() {
-    float x_acc = ((analogRead(X_PIN) - calData.xOffset) * 9.81) / 330.0;
-    float y_acc = ((analogRead(Y_PIN) - calData.yOffset) * 9.81) / 330.0;
-    float z_acc = ((analogRead(Z_PIN) - calData.zOffset) * 9.81) / 330.0;
+    float x_acc = ((analogRead(X_PIN) - (calData.xPlus + calData.xMinus) / 2) * 9.81) / 330.0;
+    float y_acc = ((analogRead(Y_PIN) - (calData.yPlus + calData.yMinus) / 2) * 9.81) / 330.0;
+    float z_acc = ((analogRead(Z_PIN) - (calData.zPlus + calData.zMinus) / 2) * 9.81) / 330.0;
 
     lcd.clear();
     lcd.setCursor(0, 0);

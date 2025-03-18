@@ -1,0 +1,62 @@
+const int xPin = A0;  // ADXL335 X-axis
+const int yPin = A1;  // ADXL335 Y-axis
+const int zPin = A2;  // ADXL335 Z-axis
+
+float xBaseline = 0, yBaseline = 0, zBaseline = 0;
+int stepCount = 0;
+bool stepDetected = false;
+float previousAcceleration = 0;
+
+void setup() {
+    Serial.begin(9600);
+
+    // Calibrate sensor (take 100 readings)
+    for (int i = 0; i < 100; i++) {
+        xBaseline += analogRead(xPin);
+        yBaseline += analogRead(yPin);
+        zBaseline += analogRead(zPin);
+        delay(10);
+    }
+    xBaseline /= 100.0;
+    yBaseline /= 100.0;
+    zBaseline /= 100.0;
+}
+
+void loop() {
+    // Read raw accelerometer values
+    int rawX = analogRead(xPin);
+    int rawY = analogRead(yPin);
+    int rawZ = analogRead(zPin);
+
+    // Convert raw ADC values to acceleration (m/s²)
+    float aX = (rawX - xBaseline) * (3.3 / 1023.0) * 10;
+    float aY = (rawY - yBaseline) * (3.3 / 1023.0) * 10;
+    float aZ = (rawZ - zBaseline) * (3.3 / 1023.0) * 10;
+
+    // Compute absolute acceleration
+    float aAbs = sqrt(aX * aX + aY * aY + aZ * aZ);
+
+    // Low-pass filter (reduce noise)
+    float filteredAcceleration = 0.8 * previousAcceleration + 0.2 * aAbs;
+    previousAcceleration = filteredAcceleration;
+
+    // Step detection using peak threshold
+    float stepThreshold = 9.0;  // Adjust based on test data
+
+    if (filteredAcceleration > stepThreshold && !stepDetected) {
+        stepCount++;
+        stepDetected = true;
+    }
+
+    if (filteredAcceleration < 7.0) {
+        stepDetected = false;
+    }
+
+    // Print step count
+    Serial.print("Filtered Acceleration: ");
+    Serial.print(filteredAcceleration);
+    Serial.print(" m/s² | Steps: ");
+    Serial.println(stepCount);
+
+    delay(50);
+}

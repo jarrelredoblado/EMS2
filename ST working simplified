@@ -1,0 +1,77 @@
+// ADXL335 Self-Test Routine (Minimal Version)
+#define X_PIN A0    // X-axis output
+#define Y_PIN A1    // Y-axis output
+#define Z_PIN A2    // Z-axis output
+#define ST_PIN 13   // Self-test pin
+
+// Sensitivity of ADXL335 at Vs = 3V (mV/g)
+float SENSITIVITY = 300.0;  
+// Arduino ADC reference voltage (mV)
+const float V_REF = 5000.0;       
+// Recalibrated zero-g voltages (mV)
+float V_ZERO_G_X = 1074.0;  // From -1.42 g
+float V_ZERO_G_Y = 1065.0;  // From -1.45 g
+float V_ZERO_G_Z = 1290.0;  // From -0.70 g
+// ADC resolution (bits)
+const int ADC_RESOLUTION = 1024;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(ST_PIN, OUTPUT);
+  digitalWrite(ST_PIN, LOW);
+  delay(1000); // Allow sensor to stabilize
+}
+
+void loop() {
+  // Measure baseline (self-test OFF)
+  digitalWrite(ST_PIN, LOW);
+  delay(100);
+  float xBaseline = readAcceleration(X_PIN, V_ZERO_G_X);
+  float yBaseline = readAcceleration(Y_PIN, V_ZERO_G_Y);
+  float zBaseline = readAcceleration(Z_PIN, V_ZERO_G_Z);
+  
+  // Activate self-test
+  digitalWrite(ST_PIN, HIGH);
+  delay(100);
+  float xTest = readAcceleration(X_PIN, V_ZERO_G_X);
+  float yTest = readAcceleration(Y_PIN, V_ZERO_G_Y);
+  float zTest = readAcceleration(Z_PIN, V_ZERO_G_Z);
+  
+  // Calculate differences in g
+  float xDiffG = xTest - xBaseline;
+  float yDiffG = yTest - yBaseline;
+  float zDiffG = zTest - zBaseline;
+  float xDiffmV = xDiffG * SENSITIVITY;
+  float yDiffmV = yDiffG * SENSITIVITY;
+  float zDiffmV = zDiffG * SENSITIVITY;
+  
+  // Check self-test against datasheet ranges
+  if (checkSelfTest(xDiffG, yDiffG, zDiffG, xDiffmV, yDiffmV, zDiffmV)) {
+    Serial.println("Self-Test: PASS");
+  } else {
+    Serial.println("Self-Test: FAIL");
+  }
+  
+  delay(5000); // Wait before repeating
+}
+
+// Function to read acceleration in g
+float readAcceleration(int pin, float vZeroG) {
+  int rawValue = analogRead(pin);
+  float voltage = (rawValue * V_REF) / (ADC_RESOLUTION - 1);
+  return (voltage - vZeroG) / SENSITIVITY;
+}
+
+// Function to check self-test against datasheet ranges
+bool checkSelfTest(float xDiffG, float yDiffG, float zDiffG, float xDiffmV, float yDiffmV, float zDiffmV) {
+  const float X_MIN_G = -0.5;    const float X_MAX_G = -2.0;
+  const float X_MIN_mV = -150.0; const float X_MAX_mV = -600.0;
+  const float Y_MIN_G = 0.5;     const float Y_MAX_G = 2.0;
+  const float Y_MIN_mV = 150.0;  const float Y_MAX_mV = 600.0;
+  const float Z_MIN_G = 0.5;     const float Z_MAX_G = 3.33;
+  const float Z_MIN_mV = 150.0;  const float Z_MAX_mV = 1000.0;
+  
+  return (xDiffG >= X_MAX_G && xDiffG <= X_MIN_G && xDiffmV >= X_MAX_mV && xDiffmV <= X_MIN_mV &&
+          yDiffG >= Y_MIN_G && yDiffG <= Y_MAX_G && yDiffmV >= Y_MIN_mV && yDiffmV <= Y_MAX_mV &&
+          zDiffG >= Z_MIN_G && zDiffG <= Z_MAX_G && zDiffmV >= Z_MIN_mV && zDiffmV <= Z_MAX_mV);
+}

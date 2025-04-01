@@ -1,0 +1,19 @@
+// Define the pin number
+const int outputPin = 5;  // Using pin 5 as specified
+
+void setup() {
+  // Set pin 5 as an output
+  pinMode(outputPin, OUTPUT);
+  
+  // For most Arduino boards running at 5V:
+  // 3.3V is approximately 66% of 5V
+  // 255 * 0.66 = ~168
+  int pwmValue = 168;  // This will give approximately 3.3V
+  
+  // Write the PWM value to pin 5
+  analogWrite(outputPin, pwmValue);
+}
+
+void loop() {
+  // Nothing needed in loop since we just want constant output
+}

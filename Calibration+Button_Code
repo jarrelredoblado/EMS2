@@ -2,18 +2,11 @@
 
 // Pin definitions
 const int BUTTON_PIN = 2;    // GPIO pin for calibration button (interrupt-capable)
-const int ST_PIN = 2;        // Self-test pin for ADXL335
+const int ST_PIN = 13;        // Self-test pin for ADXL335
 const int X_PIN = A0;        // Analog pin for X-axis
 const int Y_PIN = A1;        // Analog pin for Y-axis
 const int Z_PIN = A2;        // Analog pin for Z-axis
 
-// LCD pin definitions (adjust as needed)
-const int LCD_RS = 12;
-const int LCD_EN = 11;
-const int LCD_D4 = 5;
-const int LCD_D5 = 4;
-const int LCD_D6 = 6;
-const int LCD_D7 = 7;
 
 // Calibration constants
 const float GRAVITY = 1.0;   // 1G reference

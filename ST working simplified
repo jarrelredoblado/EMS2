@@ -64,8 +64,8 @@ float readAcceleration(int pin, float vZeroG) {
 
 // Function to check self-test against datasheet ranges
 bool checkSelfTest(float xDiffG, float yDiffG, float zDiffG, float xDiffmV, float yDiffmV, float zDiffmV) {
-  const float X_MIN_G = -0.5;    const float X_MAX_G = -2.0;
-  const float X_MIN_mV = -150.0; const float X_MAX_mV = -600.0;
+  const float X_MIN_G = 0.5;    const float X_MAX_G = 2.0;
+  const float X_MIN_mV = 150.0; const float X_MAX_mV = 600.0;
   const float Y_MIN_G = 0.5;     const float Y_MAX_G = 2.0;
   const float Y_MIN_mV = 150.0;  const float Y_MAX_mV = 600.0;
   const float Z_MIN_G = 0.5;     const float Z_MAX_G = 3.33;

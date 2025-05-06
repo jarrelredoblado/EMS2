@@ -53,8 +53,9 @@ void printAxisName(int axis) {
 
 // Check if the measured value is within ±50% of the expected value (in mV)
 bool checkPass(float measured, float expected) {
-    float min = expected * 0.75; // 75% of the expected value
-    float max = expected * 1.25; // 125% of the expected value
+    float absExpected = abs(expected);
+    float min = expected < 0 ? -absExpected * 1.25 : absExpected * 0.75;
+    float max = expected < 0 ? -absExpected * 0.75 : absExpected * 1.25;
     return measured >= min && measured <= max;
 }
 

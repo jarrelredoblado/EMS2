@@ -1,18 +1,23 @@
+#include <LiquidCrystal_I2C.h>
+
+// LCD setup: address 0x27, 16 columns, 2 rows
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// Pins
 #define X_PIN A0
 #define Y_PIN A1
 #define Z_PIN A2
 #define ST_PIN 13
-#define BUTTON_PIN 4  // Set button to pin 4
+#define BUTTON_PIN 4
 
 // Constants
-const float V_REF = 3300.0; // 3.3V reference in mV (3.3V AREF)
+const float V_REF = 3300.0;
 const int ADC_RESOLUTION = 1024;
-const float OFFSET_VOLTAGE = 1.65; // Offset voltage for 0g (typically 1.65V)
-const float SENSITIVITY = 0.3;    // Sensitivity in V/g (300 mV/g)
+const float OFFSET_VOLTAGE = 1.65;
+const float SENSITIVITY = 0.3;
+const unsigned long debounceDelay = 50;
 
-const unsigned long debounceDelay = 50; // Debounce delay
-
-// Calibration zero-offsets
+// Calibration offsets
 float xOffset = 0.0;
 float yOffset = 0.0;
 float zOffset = 0.0;
@@ -24,217 +29,186 @@ int buttonState = HIGH;
 int lastButtonState = HIGH;
 unsigned long lastDebounceTime = 0;
 
-// ----------- Helper Functions -----------
-
-// Read voltage from the sensor (in mV)
+// Helper functions
 float readVoltage(int pin) {
-    int raw = analogRead(pin);
-    return (raw * V_REF) / (ADC_RESOLUTION - 1);  // Scale based on 3.3V reference
+  int raw = analogRead(pin);
+  return (raw * V_REF) / (ADC_RESOLUTION - 1);
 }
 
-// Convert the voltage reading to acceleration in g's (for live readings and calibration)
 float convertToAcceleration(float voltage) {
-    return (voltage - OFFSET_VOLTAGE) / SENSITIVITY;  // Convert to g using sensitivity
+  return (voltage - OFFSET_VOLTAGE) / SENSITIVITY;
 }
 
-// Check if all axes are calibrated
 bool allCalibrated() {
-    return isCalibrated[0] && isCalibrated[1] && isCalibrated[2];
+  return isCalibrated[0] && isCalibrated[1] && isCalibrated[2];
 }
 
-// Print axis name based on the axis index
 void printAxisName(int axis) {
-    if (axis == 0) Serial.println("➡️ Next: X axis");
-    else if (axis == 1) Serial.println("➡️ Next: Y axis");
-    else if (axis == 2) Serial.println("➡️ Next: Z axis");
+  if (axis == 0) Serial.println("➡️ Next: X axis");
+  else if (axis == 1) Serial.println("➡️ Next: Y axis");
+  else if (axis == 2) Serial.println("➡️ Next: Z axis");
 }
 
-// ----------- Self-Test Function -----------
-
-// Check if the measured value is within ±50% of the expected value (in mV)
+// Self-test
 bool checkPass(float measured, float expected) {
-    float absExpected = abs(expected);
-    float min = expected < 0 ? -absExpected * 1.25 : absExpected * 0.75;
-    float max = expected < 0 ? -absExpected * 0.75 : absExpected * 1.25;
-    return measured >= min && measured <= max;
+  float absExpected = abs(expected);
+  float min = expected < 0 ? -absExpected * 1.25 : absExpected * 0.75;
+  float max = expected < 0 ? -absExpected * 0.75 : absExpected * 1.25;
+  return measured >= min && measured <= max;
 }
 
 void runSelfTest() {
-    // Expected self-test response (in mV)
-    const float X_TYP_mV = -325.0;  // Expected self-test change (mV) for X axis (negative)
-    const float Y_TYP_mV = 325.0;   // Expected self-test change (mV) for Y axis (positive)
-    const float Z_TYP_mV = 550.0;   // Expected self-test change (mV) for Z axis (positive)
+  const float X_TYP_mV = -325.0;
+  const float Y_TYP_mV = 325.0;
+  const float Z_TYP_mV = 550.0;
 
-    // Step 1: Read baseline values (in mV)
-    digitalWrite(ST_PIN, LOW);
-    delay(100);
-    float xBase = readVoltage(X_PIN);
-    float yBase = readVoltage(Y_PIN);
-    float zBase = readVoltage(Z_PIN);
+  digitalWrite(ST_PIN, LOW);
+  delay(100);
+  float xBase = readVoltage(X_PIN);
+  float yBase = readVoltage(Y_PIN);
+  float zBase = readVoltage(Z_PIN);
 
-    // Step 2: Enable self-test
-    digitalWrite(ST_PIN, HIGH);
-    delay(100);
-    float xST = readVoltage(X_PIN);
-    float yST = readVoltage(Y_PIN);
-    float zST = readVoltage(Z_PIN);
+  digitalWrite(ST_PIN, HIGH);
+  delay(100);
+  float xST = readVoltage(X_PIN);
+  float yST = readVoltage(Y_PIN);
+  float zST = readVoltage(Z_PIN);
 
-    // Step 3: Compute differences in mV (not converting to g here)
-    float dx = xST - xBase;
-    float dy = yST - yBase;
-    float dz = zST - zBase;
+  float dx = xST - xBase;
+  float dy = yST - yBase;
+  float dz = zST - zBase;
 
-    // Step 4: Check validity (±50% tolerance from typical) for voltage differences
-    bool xPass = checkPass(dx, X_TYP_mV); // Check for voltage change (allow negative for X)
-    bool yPass = checkPass(dy, Y_TYP_mV); // Expect positive for Y
-    bool zPass = checkPass(dz, Z_TYP_mV); // Expect positive for Z
+  bool xPass = checkPass(dx, X_TYP_mV);
+  bool yPass = checkPass(dy, Y_TYP_mV);
+  bool zPass = checkPass(dz, Z_TYP_mV);
 
-    if (xPass && yPass && zPass) {
-        Serial.println("Self-test passed");
-    } else {
-        // Print failure details with measured and expected values
-        Serial.println("Self-test failed. Measured and expected values:");
+  if (xPass && yPass && zPass) {
+    Serial.println("✅ Self-test passed");
+  } else {
+    Serial.println("❌ Self-test failed.");
+  }
 
-        // X axis
-        Serial.print("X axis: Measured = ");
-        Serial.print(dx, 3);
-        Serial.print(" mV | Expected Range: ");
-        Serial.print(X_TYP_mV * 0.75);  // Expected value ±50% tolerance
-        Serial.print(" to ");
-        Serial.println(X_TYP_mV * 1.25);
-
-        // Y axis
-        Serial.print("Y axis: Measured = ");
-        Serial.print(dy, 3);
-        Serial.print(" mV | Expected Range: ");
-        Serial.print(Y_TYP_mV * 0.75);
-        Serial.print(" to ");
-        Serial.println(Y_TYP_mV * 1.25);
-
-        // Z axis
-        Serial.print("Z axis: Measured = ");
-        Serial.print(dz, 3);
-        Serial.print(" mV | Expected Range: ");
-        Serial.print(Z_TYP_mV * 0.75);
-        Serial.print(" to ");
-        Serial.println(Z_TYP_mV * 1.25);
-    }
+  digitalWrite(ST_PIN, LOW);
 }
 
-// ----------- Calibration Function -----------
-
-// Calibrate a given axis (positive and negative)
+// Axis calibration
 void calibrateAxis(int axis) {
-    switch (axis) {
-        case 0:  // X axis
-            Serial.println("⚙️ Calibrating X axis... Position +X up and press button");
-            xOffset = readVoltage(X_PIN);
-            Serial.print("✅ X offset set to: ");
-            Serial.println(xOffset, 3);
-            
-            // Calibrate -X axis
-            Serial.println("⚙️ Calibrating X axis... Position -X up and press button");
-            xOffset = (xOffset + readVoltage(X_PIN)) / 2;  // Average both positions
-            Serial.print("✅ X offset adjusted to: ");
-            Serial.println(xOffset, 3);
-            break;
-        case 1:  // Y axis
-            Serial.println("⚙️ Calibrating Y axis... Position +Y up and press button");
-            yOffset = readVoltage(Y_PIN);
-            Serial.print("✅ Y offset set to: ");
-            Serial.println(yOffset, 3);
-            
-            // Calibrate -Y axis
-            Serial.println("⚙️ Calibrating Y axis... Position -Y up and press button");
-            yOffset = (yOffset + readVoltage(Y_PIN)) / 2;  // Average both positions
-            Serial.print("✅ Y offset adjusted to: ");
-            Serial.println(yOffset, 3);
-            break;
-        case 2:  // Z axis
-            Serial.println("⚙️ Calibrating Z axis... Position +Z up and press button");
-            zOffset = readVoltage(Z_PIN);
-            Serial.print("✅ Z offset set to: ");
-            Serial.println(zOffset, 3);
-            
-            // Calibrate -Z axis
-            Serial.println("⚙️ Calibrating Z axis... Position -Z up and press button");
-            zOffset = (zOffset + readVoltage(Z_PIN)) / 2;  // Average both positions
-            Serial.print("✅ Z offset adjusted to: ");
-            Serial.println(zOffset, 3);
-            break;
-    }
-    isCalibrated[axis] = true;
+  switch (axis) {
+    case 0:
+      Serial.println("Calibrating X axis... Place +X then press button.");
+      xOffset = readVoltage(X_PIN);
+      Serial.println("Now place -X and press button.");
+      xOffset = (xOffset + readVoltage(X_PIN)) / 2;
+      Serial.print("✅ X offset: "); Serial.println(xOffset);
+      break;
+    case 1:
+      Serial.println("Calibrating Y axis... Place +Y then press button.");
+      yOffset = readVoltage(Y_PIN);
+      Serial.println("Now place -Y and press button.");
+      yOffset = (yOffset + readVoltage(Y_PIN)) / 2;
+      Serial.print("✅ Y offset: "); Serial.println(yOffset);
+      break;
+    case 2:
+      Serial.println("Calibrating Z axis... Place +Z then press button.");
+      zOffset = readVoltage(Z_PIN);
+      Serial.println("Now place -Z and press button.");
+      zOffset = (zOffset + readVoltage(Z_PIN)) / 2;
+      Serial.print("✅ Z offset: "); Serial.println(zOffset);
+      break;
+  }
+  isCalibrated[axis] = true;
 }
 
-// ----------- Setup and Loop -----------
-
-// Initialize the system
+// Setup
 void setup() {
-    pinMode(BUTTON_PIN, INPUT_PULLUP);
-    pinMode(ST_PIN, OUTPUT);
-    digitalWrite(ST_PIN, LOW);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(ST_PIN, OUTPUT);
+  digitalWrite(ST_PIN, LOW);
 
-    pinMode(X_PIN, INPUT);
-    pinMode(Y_PIN, INPUT);
-    pinMode(Z_PIN, INPUT);
+  analogReference(AR_EXTERNAL);
 
-    analogReference(AR_EXTERNAL);
-    Serial.begin(9600);
-    delay(400);
+  Serial.begin(9600);
+  delay(400);
+  lcd.init();
+  lcd.backlight();
 
-    Serial.println("System Ready");
+  lcd.setCursor(0, 0);
+  lcd.print("System Init...");
 
-    runSelfTest();  // Run self-test after setup
+  Serial.println("System Ready");
+  runSelfTest();
 
-    Serial.println("Press the button to begin axis-by-axis calibration");
-    printAxisName(axisIndex);
+  Serial.println("Press button to start calibration");
+  printAxisName(axisIndex);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Calibrating...");
+  lcd.setCursor(0, 1);
+  lcd.print("Axis: X");
 }
 
-// Main loop to handle button press and calibration
+// Main loop
 void loop() {
-    int reading = digitalRead(BUTTON_PIN);
+  int reading = digitalRead(BUTTON_PIN);
 
-    if (reading != lastButtonState) {
-        lastDebounceTime = millis();
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (reading == LOW && buttonState == HIGH) {
+      calibrateAxis(axisIndex);
+      axisIndex = (axisIndex + 1) % 3;
+
+      if (axisIndex == 0 && allCalibrated()) {
+        Serial.println("✅ All axes calibrated!");
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Calib Done!");
+        delay(1000);
+      } else {
+        printAxisName(axisIndex);
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Calibrating...");
+        lcd.setCursor(0, 1);
+        lcd.print("Axis: ");
+        if (axisIndex == 0) lcd.print("X");
+        if (axisIndex == 1) lcd.print("Y");
+        if (axisIndex == 2) lcd.print("Z");
+      }
+
+      buttonState = LOW;
+    } else if (reading == HIGH) {
+      buttonState = HIGH;
     }
+  }
 
-    if ((millis() - lastDebounceTime) > debounceDelay) {
-        if (reading == LOW && buttonState == HIGH) {
-            // Button just pressed
-            calibrateAxis(axisIndex);
-            axisIndex = (axisIndex + 1) % 3;
+  lastButtonState = reading;
 
-            if (axisIndex == 0 && allCalibrated()) {
-                Serial.println("✅ All axes calibrated!");
-                Serial.println("➡️ Starting live acceleration readings...");
-            } else {
-                printAxisName(axisIndex);
-            }
+  if (!allCalibrated()) return;
 
-            buttonState = LOW;
-        } else if (reading == HIGH) {
-            buttonState = HIGH;
-        }
-    }
+  float x = convertToAcceleration(readVoltage(X_PIN) - xOffset);
+  float y = convertToAcceleration(readVoltage(Y_PIN) - yOffset);
+  float z = convertToAcceleration(readVoltage(Z_PIN) - zOffset);
 
-    lastButtonState = reading;
+  Serial.print("X: ");
+  Serial.print(x, 2);
+  Serial.print(" g | Y: ");
+  Serial.print(y, 2);
+  Serial.print(" g | Z: ");
+  Serial.println(z, 2);
 
-    // Only begin readings after calibration is done
-    if (!allCalibrated()) return;
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("X:");
+  lcd.print(x, 2);
+  lcd.print(" Y:");
+  lcd.print(y, 2);
+  lcd.setCursor(0, 1);
+  lcd.print("Z:");
+  lcd.print(z, 2);
 
-    // Convert voltage readings to acceleration in g's
-    float x = convertToAcceleration(readVoltage(X_PIN) - xOffset);
-    float y = convertToAcceleration(readVoltage(Y_PIN) - yOffset);
-    float z = convertToAcceleration(readVoltage(Z_PIN) - zOffset);
-
-    // Display live acceleration readings in g
-    Serial.print("X: ");
-    Serial.print(x, 3);
-    Serial.print(" g | Y: ");
-    Serial.print(y, 3);
-    Serial.print(" g | Z: ");
-    Serial.print(z, 3);
-    Serial.println(" g");
-
-    delay(400);  // Delay to prevent spamming the serial output
+  delay(400);
 }

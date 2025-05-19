@@ -1,19 +1,18 @@
 #include <LiquidCrystal_I2C.h>
 
-// Initialize LCD (address 0x27, 16 columns, 2 rows)
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 #define X_PIN A0
 #define Y_PIN A1
 #define Z_PIN A2
-#define ST_PIN 13  // Restored from original code for self-test control
+#define ST_PIN 13
 #define BUTTON_PIN 4
-const int pwmPin = 5;  // PWM output pin for self-test voltage
+const int pwmPin = 5;
 
-const float V_REF = 3000.0;  // Adjusted to 3V reference voltage (from provided code)
+const float V_REF = 3000.0;
 const int ADC_RESOLUTION = 1024;
-const float OFFSET_VOLTAGE = 1500.0;  // Adjusted to 1.5V (half of 3V supply)
-const float SENSITIVITY = 0.2727;  // Adjusted to ~0.2727 V/g for 3V supply (0.3 V/g scaled from 3.3V)
+const float OFFSET_VOLTAGE = 1500.0;
+const float SENSITIVITY = 0.2727;
 const unsigned long debounceDelay = 50;
 
 float xOffset = 0.0;
@@ -27,15 +26,31 @@ int buttonState = HIGH;
 int lastButtonState = HIGH;
 unsigned long lastDebounceTime = 0;
 
-// ----------- Helper Functions -----------
+bool fixedConversion = false;  // Start with original conversion mode
 
 float readVoltage(int pin) {
   int raw = analogRead(pin);
   return (raw * V_REF) / (ADC_RESOLUTION - 1);
 }
 
-float convertToAcceleration(float voltage) {
+// Original conversion: subtract offset inside
+float convertToAccelerationOriginal(float voltage) {
   return (voltage - OFFSET_VOLTAGE) / SENSITIVITY;
+}
+
+// Fixed conversion: expects voltage difference only
+float convertToAccelerationFixed(float voltageDiff) {
+  return voltageDiff / SENSITIVITY;
+}
+
+float convertToAcceleration(float voltage) {
+  if (fixedConversion) {
+    // Use fixed conversion - expects voltage difference
+    return convertToAccelerationFixed(voltage);
+  } else {
+    // Use original conversion - subtract offset inside
+    return convertToAccelerationOriginal(voltage);
+  }
 }
 
 bool allCalibrated() {
@@ -57,26 +72,23 @@ void printAxisName(int axis) {
 }
 
 bool checkPass(float measured, float expected) {
-  // Define the acceptable range based on the axis (expected value determines the axis)
-  if (expected == -325.0) { // X-axis
+  if (expected == -325.0) {
     return measured >= -600.0 && measured <= -150.0;
-  } else if (expected == 325.0) { // Y-axis
+  } else if (expected == 325.0) {
     return measured >= 150.0 && measured <= 600.0;
-  } else if (expected == 550.0) { // Z-axis
+  } else if (expected == 550.0) {
     return measured >= 150.0 && measured <= 1000.0;
   }
-  return false; // Default case, should not occur
+  return false;
 }
 
-// ----------- Self-Test -----------
-
+// Self-test using original conversion function logic
 void runSelfTest() {
   const float X_TYP_mV = -325.0;
   const float Y_TYP_mV = 325.0;
   const float Z_TYP_mV = 550.0;
 
-  // Ensure PWM pin is off before baseline reading
-  analogWrite(pwmPin, 0);   // PWM OFF => 0V on pin 5
+  analogWrite(pwmPin, 0);
   digitalWrite(ST_PIN, LOW);
   delay(100);
 
@@ -84,46 +96,41 @@ void runSelfTest() {
   float yBase = readVoltage(Y_PIN);
   float zBase = readVoltage(Z_PIN);
 
-  // Turn on PWM to ~3V on pin 5 and activate self-test
-  int pwmValue = 160;  // ~3V on 5V Arduino PWM scale
+  int pwmValue = 160;
   analogWrite(pwmPin, pwmValue);
   digitalWrite(ST_PIN, HIGH);
-  
-  // Display self-test values for 5 seconds, updating every 500ms
-  Serial.println("Displaying self-test values for 5 seconds (updating every 500ms):");
-  for (int i = 0; i < 3; i++) {  // 10 iterations x 500ms = 5 seconds
+
+  Serial.println("Displaying self-test values for 1.5 seconds:");
+  for (int i = 0; i < 3; i++) {
     float xST = readVoltage(X_PIN);
     float yST = readVoltage(Y_PIN);
     float zST = readVoltage(Z_PIN);
 
-    // Convert voltages to acceleration (g's)
-    float xAcc = convertToAcceleration(xST);
-    float yAcc = convertToAcceleration(yST);
-    float zAcc = convertToAcceleration(zST);
+    // Use original conversion (offset subtracted inside)
+    float xAcc = convertToAccelerationOriginal(xST);
+    float yAcc = convertToAccelerationOriginal(yST);
+    float zAcc = convertToAccelerationOriginal(zST);
 
-    // Display on Serial monitor
-    Serial.print("Self-Test (t="); Serial.print((i + 1) * 500); Serial.print("ms): ");
-    Serial.print("X: "); Serial.print(xAcc, 3);
+    Serial.print("Self-Test (t=");
+    Serial.print((i + 1) * 500);
+    Serial.print("ms): X: "); Serial.print(xAcc, 3);
     Serial.print(" g | Y: "); Serial.print(yAcc, 3);
     Serial.print(" g | Z: "); Serial.print(zAcc, 3);
     Serial.println(" g");
 
-    // Display on LCD
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("ST X:"); lcd.print(xAcc, 2); lcd.print(" Y:"); lcd.print(yAcc, 2);
     lcd.setCursor(0, 1);
     lcd.print("Z:"); lcd.print(zAcc, 2); lcd.print(" g");
 
-    delay(500);  // Update every 500ms
+    delay(500);
   }
 
-  // Take final self-test readings for pass/fail check
   float xST = readVoltage(X_PIN);
   float yST = readVoltage(Y_PIN);
   float zST = readVoltage(Z_PIN);
 
-  // Turn off PWM and self-test
   analogWrite(pwmPin, 0);
   digitalWrite(ST_PIN, LOW);
 
@@ -147,6 +154,7 @@ void runSelfTest() {
   if (xPass && yPass && zPass) {
     lcd.print("PASSED");
     Serial.println("Self-test passed");
+    fixedConversion = true;  // Switch to fixed conversion after passing self-test
   } else {
     lcd.print("FAILED");
     Serial.println("Self-test failed");
@@ -154,8 +162,6 @@ void runSelfTest() {
 
   delay(2000);
 }
-
-// ----------- Calibration -----------
 
 void calibrateAxis(int axis) {
   const char* axisName = (axis == 0) ? "X" : (axis == 1) ? "Y" : "Z";
@@ -198,14 +204,12 @@ void calibrateAxis(int axis) {
   Serial.println(*offset, 3);
 }
 
-// ----------- Setup -----------
-
 void setup() {
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(ST_PIN, OUTPUT);
   digitalWrite(ST_PIN, LOW);
-  pinMode(pwmPin, OUTPUT);   // Set PWM pin as output
-  analogWrite(pwmPin, 0);    // Start with PWM off
+  pinMode(pwmPin, OUTPUT);
+  analogWrite(pwmPin, 0);
 
   analogReference(AR_EXTERNAL);
   Serial.begin(9600);
@@ -228,8 +232,6 @@ void setup() {
   delay(2000);
   printAxisName(axisIndex);
 }
-
-// ----------- Loop -----------
 
 void loop() {
   int reading = digitalRead(BUTTON_PIN);
@@ -263,9 +265,18 @@ void loop() {
 
   if (!allCalibrated()) return;
 
-  float x = convertToAcceleration(readVoltage(X_PIN) - xOffset);
-  float y = convertToAcceleration(readVoltage(Y_PIN) - yOffset);
-  float z = convertToAcceleration(readVoltage(Z_PIN) - zOffset);
+  float x, y, z;
+  if (fixedConversion) {
+    // Fixed conversion expects voltage difference
+    x = convertToAccelerationFixed(readVoltage(X_PIN) - xOffset);
+    y = convertToAccelerationFixed(readVoltage(Y_PIN) - yOffset);
+    z = convertToAccelerationFixed(readVoltage(Z_PIN) - zOffset);
+  } else {
+    // Original conversion subtracts offset internally
+    x = convertToAccelerationOriginal(readVoltage(X_PIN));
+    y = convertToAccelerationOriginal(readVoltage(Y_PIN));
+    z = convertToAccelerationOriginal(readVoltage(Z_PIN));
+  }
 
   Serial.print("X: "); Serial.print(x, 3);
   Serial.print(" g | Y: "); Serial.print(y, 3);
@@ -274,9 +285,11 @@ void loop() {
 
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("X:"); lcd.print(x, 2); lcd.print(" Y:"); lcd.print(y, 2);
+  lcd.print("X:"); lcd.print(x, 2);
+  lcd.print(" Y:"); lcd.print(y, 2);
   lcd.setCursor(0, 1);
-  lcd.print("Z:"); lcd.print(z, 2); lcd.print(" g");
+  lcd.print("Z:"); lcd.print(z, 2);
+  lcd.print(" g");
 
   delay(400);
 }

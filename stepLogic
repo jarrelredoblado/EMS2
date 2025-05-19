@@ -1,0 +1,330 @@
+#include <LiquidCrystal_I2C.h>
+
+// Initialize LCD (address 0x27, 16 columns, 2 rows)
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+#define X_PIN A0
+#define Y_PIN A1
+#define Z_PIN A2
+#define ST_PIN 13  // Self-test control pin
+#define BUTTON_PIN 4
+const int pwmPin = 5;  // PWM output pin for self-test voltage
+
+const float V_REF = 3000.0;  // 3V reference in mV
+const int ADC_RESOLUTION = 1024;
+const float OFFSET_VOLTAGE = 1500.0;  // 1.5V in mV
+const float SENSITIVITY = 0.2727;  // V/g scaled for 3V supply (0.3V/g scaled)
+const unsigned long debounceDelay = 50;
+
+float xOffset = 0.0;
+float yOffset = 0.0;
+float zOffset = 0.0;
+
+int axisIndex = 0;
+bool isCalibrated[3] = {false, false, false};
+
+int buttonState = HIGH;
+int lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+
+int stepCount = 0;
+bool showStepsOnly = false; // Controls display mode
+
+// For back-and-forth step detection:
+bool waitingForRise = true;
+const float posThreshold = 0.3;   // Positive threshold for step rise
+const float negThreshold = -0.3;  // Negative threshold for step fall
+
+// ----------- Helper Functions -----------
+
+float readVoltage(int pin) {
+  int raw = analogRead(pin);
+  return (raw * V_REF) / (ADC_RESOLUTION - 1);
+}
+
+// Conversion subtracts offset inside (for main loop)
+float convertToAcceleration(float voltage) {
+  return (voltage - OFFSET_VOLTAGE) / SENSITIVITY;
+}
+
+bool allCalibrated() {
+  return isCalibrated[0] && isCalibrated[1] && isCalibrated[2];
+}
+
+void printAxisName(int axis) {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Next: ");
+  if (axis == 0) lcd.print("X axis");
+  else if (axis == 1) lcd.print("Y axis");
+  else if (axis == 2) lcd.print("Z axis");
+
+  Serial.print("➡️ Next: ");
+  if (axis == 0) Serial.println("X axis");
+  else if (axis == 1) Serial.println("Y axis");
+  else if (axis == 2) Serial.println("Z axis");
+}
+
+bool checkPass(float measured, float expected) {
+  if (expected == -325.0) {
+    return measured >= -600.0 && measured <= -150.0;
+  } else if (expected == 325.0) {
+    return measured >= 150.0 && measured <= 600.0;
+  } else if (expected == 550.0) {
+    return measured >= 150.0 && measured <= 1000.0;
+  }
+  return false;
+}
+
+// ----------- Self-Test -----------
+
+void runSelfTest() {
+  const float X_TYP_mV = -325.0;
+  const float Y_TYP_mV = 325.0;
+  const float Z_TYP_mV = 550.0;
+
+  analogWrite(pwmPin, 0);
+  digitalWrite(ST_PIN, LOW);
+  delay(100);
+
+  float xBase = readVoltage(X_PIN);
+  float yBase = readVoltage(Y_PIN);
+  float zBase = readVoltage(Z_PIN);
+
+  int pwmValue = 160;
+  analogWrite(pwmPin, pwmValue);
+  digitalWrite(ST_PIN, HIGH);
+
+  Serial.println("Displaying self-test values for 1.5 seconds:");
+  for (int i = 0; i < 3; i++) {
+    float xST = readVoltage(X_PIN);
+    float yST = readVoltage(Y_PIN);
+    float zST = readVoltage(Z_PIN);
+
+    float xAcc = convertToAcceleration(xST);
+    float yAcc = convertToAcceleration(yST);
+    float zAcc = convertToAcceleration(zST);
+
+    Serial.print("Self-Test (t=");
+    Serial.print((i + 1) * 500);
+    Serial.print("ms): X: "); Serial.print(xAcc, 3);
+    Serial.print(" g | Y: "); Serial.print(yAcc, 3);
+    Serial.print(" g | Z: "); Serial.print(zAcc, 3);
+    Serial.println(" g");
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("ST X:"); lcd.print(xAcc, 2); lcd.print(" Y:"); lcd.print(yAcc, 2);
+    lcd.setCursor(0, 1);
+    lcd.print("Z:"); lcd.print(zAcc, 2); lcd.print(" g");
+
+    delay(500);
+  }
+
+  float xST = readVoltage(X_PIN);
+  float yST = readVoltage(Y_PIN);
+  float zST = readVoltage(Z_PIN);
+
+  analogWrite(pwmPin, 0);
+  digitalWrite(ST_PIN, LOW);
+
+  float dx = xST - xBase;
+  float dy = yST - yBase;
+  float dz = zST - zBase;
+
+  bool xPass = checkPass(dx, X_TYP_mV);
+  bool yPass = checkPass(dy, Y_TYP_mV);
+  bool zPass = checkPass(dz, Z_TYP_mV);
+
+  Serial.println("Self-Test Results:");
+  Serial.print("X ΔV: "); Serial.print(dx, 2); Serial.println(xPass ? " mV -> PASS" : " mV -> FAIL");
+  Serial.print("Y ΔV: "); Serial.print(dy, 2); Serial.println(yPass ? " mV -> PASS" : " mV -> FAIL");
+  Serial.print("Z ΔV: "); Serial.print(dz, 2); Serial.println(zPass ? " mV -> PASS" : " mV -> FAIL");
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Self-Test:");
+  lcd.setCursor(0, 1);
+  if (xPass && yPass && zPass) {
+    lcd.print("PASSED");
+    Serial.println("Self-test passed");
+  } else {
+    lcd.print("FAILED");
+    Serial.println("Self-test failed");
+  }
+
+  delay(2000);
+}
+
+// ----------- Calibration -----------
+
+void calibrateAxis(int axis) {
+  const char* axisName = (axis == 0) ? "X" : (axis == 1) ? "Y" : "Z";
+  float* offset = (axis == 0) ? &xOffset : (axis == 1) ? &yOffset : &zOffset;
+
+  Serial.print("⚙️ Calibrating ");
+  Serial.print(axisName);
+  Serial.println(" axis... + then -");
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Calibrate ");
+  lcd.print(axisName);
+  lcd.setCursor(0, 1);
+  lcd.print("+"); lcd.print(axisName); lcd.print(" up, press");
+
+  while (digitalRead(BUTTON_PIN) == HIGH) delay(10);
+  *offset = readVoltage(axis == 0 ? X_PIN : axis == 1 ? Y_PIN : Z_PIN);
+  delay(500);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Now -"); lcd.print(axisName); lcd.print(" up");
+  lcd.setCursor(0, 1);
+  lcd.print("Then press");
+
+  while (digitalRead(BUTTON_PIN) == HIGH) delay(10);
+  *offset = (*offset + readVoltage(axis == 0 ? X_PIN : axis == 1 ? Y_PIN : Z_PIN)) / 2;
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(axisName); lcd.print(" Calib Done");
+  delay(1000);
+
+  isCalibrated[axis] = true;
+
+  Serial.print("✅ ");
+  Serial.print(axisName);
+  Serial.print(" offset: ");
+  Serial.println(*offset, 3);
+
+  if (allCalibrated()) {
+    stepCount = 0; // reset step count
+    showStepsOnly = true; // switch display mode to steps only
+    displaySteps();
+  }
+}
+
+// ----------- Step Counting -----------
+
+bool detectStepBackAndForth(float zAcc) {
+  if (waitingForRise) {
+    if (zAcc > posThreshold) {
+      waitingForRise = false; // now wait for falling edge
+    }
+  } else {
+    if (zAcc < negThreshold) {
+      waitingForRise = true;  // reset for next step
+      stepCount++;
+      Serial.print("Step detected! Total steps: ");
+      Serial.println(stepCount);
+      displaySteps();
+      return true;
+    }
+  }
+  return false;
+}
+
+void displaySteps() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Steps taken:");
+  lcd.setCursor(0, 1);
+  lcd.print(stepCount);
+}
+
+// ----------- Setup -----------
+
+void setup() {
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(ST_PIN, OUTPUT);
+  digitalWrite(ST_PIN, LOW);
+  pinMode(pwmPin, OUTPUT);
+  analogWrite(pwmPin, 0);
+
+  analogReference(AR_EXTERNAL);
+  Serial.begin(9600);
+
+  lcd.init();
+  lcd.backlight();
+
+  lcd.setCursor(0, 0);
+  lcd.print("System Ready");
+  Serial.println("System Ready");
+  delay(2000);
+
+  runSelfTest();
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Press button to");
+  lcd.setCursor(0, 1);
+  lcd.print("calibrate");
+  delay(2000);
+  printAxisName(axisIndex);
+}
+
+// ----------- Loop -----------
+
+void loop() {
+  int reading = digitalRead(BUTTON_PIN);
+
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (reading == LOW && buttonState == HIGH) {
+      calibrateAxis(axisIndex);
+      axisIndex = (axisIndex + 1) % 3;
+
+      if (axisIndex == 0 && allCalibrated()) {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("All Calibrated");
+        Serial.println("✅ All axes calibrated!");
+        delay(2000);
+
+        showStepsOnly = true;  // Ensure steps-only display mode is active
+        displaySteps();
+      } else {
+        printAxisName(axisIndex);
+      }
+
+      buttonState = LOW;
+    } else if (reading == HIGH) {
+      buttonState = HIGH;
+    }
+  }
+
+  lastButtonState = reading;
+
+  if (!allCalibrated()) return;
+
+  float x = convertToAcceleration(readVoltage(X_PIN) - xOffset);
+  float y = convertToAcceleration(readVoltage(Y_PIN) - yOffset);
+  float z = convertToAcceleration(readVoltage(Z_PIN) - zOffset);
+
+  detectStepBackAndForth(z);  // use back-and-forth step detection
+
+  if (showStepsOnly) {
+    // Display only step count after calibration
+    displaySteps();
+  } else {
+    // Before full calibration, show accelerometer data
+    Serial.print("X: "); Serial.print(x, 3);
+    Serial.print(" g | Y: "); Serial.print(y, 3);
+    Serial.print(" g | Z: "); Serial.print(z, 3);
+    Serial.println(" g");
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("X:"); lcd.print(x, 2);
+    lcd.print(" Y:"); lcd.print(y, 2);
+    lcd.setCursor(0, 1);
+    lcd.print("Z:"); lcd.print(z, 2);
+    lcd.print(" g");
+  }
+
+  delay(400);
+}

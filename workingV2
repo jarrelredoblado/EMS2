@@ -91,7 +91,7 @@ void runSelfTest() {
   
   // Display self-test values for 5 seconds, updating every 500ms
   Serial.println("Displaying self-test values for 5 seconds (updating every 500ms):");
-  for (int i = 0; i < 10; i++) {  // 10 iterations x 500ms = 5 seconds
+  for (int i = 0; i < 3; i++) {  // 10 iterations x 500ms = 5 seconds
     float xST = readVoltage(X_PIN);
     float yST = readVoltage(Y_PIN);
     float zST = readVoltage(Z_PIN);

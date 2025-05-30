@@ -1,0 +1,85 @@
+#include <Wire.h>
+#include "ADXL335.h"
+
+// Accelerometer
+ADXL335 accelerometer;
+
+// Button pin
+const int buttonPin = 2;
+int buttonState = 0;
+
+// Calibration data
+int calibrationData[6][3]; // 6 directions, 3-axis each
+const char* directions[6] = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"};
+
+void setup() {
+    Serial.begin(9600);
+    accelerometer.begin();
+    pinMode(buttonPin, INPUT);
+
+    Serial.println("Press button to");
+    Serial.println("start Calibrate");
+
+    // Wait for button press
+    waitForButtonPress();
+
+    for (int i = 0; i < 6; i++) {
+        Serial.print("Place on surface, Direction: ");
+        Serial.println(directions[i]);
+        delay(2000); // Wait 2 seconds
+
+        int x, y, z;
+        calibrate(&x, &y, &z);
+        calibrationData[i][0] = x;
+        calibrationData[i][1] = y;
+        calibrationData[i][2] = z;
+
+        Serial.print("Direction ");
+        Serial.print(directions[i]);
+        Serial.print(": ");
+        Serial.print("X=");
+        Serial.print(x);
+        Serial.print(" Y=");
+        Serial.print(y);
+        Serial.print(" Z=");
+        Serial.println(z);
+    }
+
+    Serial.println("Calibration");
+    Serial.println("Successful!");
+    Serial.println("Calibration Successful");
+}
+
+void loop() {
+    // Nothing to do in loop
+}
+
+void calibrate(int* _x, int* _y, int* _z) {
+    int x, y, z;
+    int sum_x = 0, sum_y = 0, sum_z = 0;
+    int samples = 10;
+
+    for (int i = 0; i < samples; i++) {
+        accelerometer.getXYZ(&x, &y, &z);
+        sum_x += x;
+        sum_y += y;
+        sum_z += z;
+        delay(10);
+    }
+
+    *_x = sum_x / samples;
+    *_y = sum_y / samples;
+    *_z = sum_z / samples;
+}
+
+void waitForButtonPress() {
+    Serial.println("Waiting for button press...");
+    while (digitalRead(buttonPin) == LOW) {
+        delay(100);
+    }
+    delay(500); // Debounce
+    Serial.println("Button pressed!");
+    while (digitalRead(buttonPin) == HIGH) {
+        delay(100);
+    }
+}

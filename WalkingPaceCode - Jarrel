@@ -1,0 +1,94 @@
+#include <math.h>
+
+// ADXL335 analog output pins
+const int xPin = A0;
+const int yPin = A1;
+const int zPin = A2;
+
+// Constants for ADXL335
+const float ZERO_G_VOLTAGE = 1.5;    // Voltage at 0g
+const float SENSITIVITY = 0.330;      // V/g sensitivity
+const float ADC_REF = 5.0;            // ADC reference voltage
+const int ADC_MAX = 1023;             // 10-bit ADC
+
+// Pace thresholds in g
+const float threshold_stationary = 6;
+const float threshold_walking = 7;
+
+// Moving average filter settings
+const int WINDOW_SIZE = 10;           // Number of readings to average
+float magnitudeHistory[WINDOW_SIZE];  // Array to store magnitude history
+int historyIndex = 0;                 // Current index in history array
+float magnitudeSum = 0.0;             // Sum of magnitudes in history
+
+String pace = "Stationary";
+
+void setup() {
+  Serial.begin(9600);  // Start Serial Monitor
+
+  // Initialize magnitude history array
+  for (int i = 0; i < WINDOW_SIZE; i++) {
+    magnitudeHistory[i] = 0.0;
+  }
+
+  Serial.println("Walking-Pace ID");
+  delay(2000);
+}
+
+float readAccel(int pin) {
+  int raw = analogRead(pin);
+  float voltage = (raw * ADC_REF) / ADC_MAX;
+  float accel = (voltage - ZERO_G_VOLTAGE) / SENSITIVITY;
+  return accel;
+}
+
+float getAverageMagnitude(float newMagnitude) {
+  // Subtract the oldest magnitude from the sum
+  magnitudeSum -= magnitudeHistory[historyIndex];
+  // Add the new magnitude to the history
+  magnitudeHistory[historyIndex] = newMagnitude;
+  magnitudeSum += newMagnitude;
+  // Move to the next index, wrap around if necessary
+  historyIndex = (historyIndex + 1) % WINDOW_SIZE;
+  // Return the average
+  return magnitudeSum / WINDOW_SIZE;
+}
+
+void loop() {
+  // Read acceleration in g
+  float ax = readAccel(xPin);
+  float ay = readAccel(yPin);
+  float az = readAccel(zPin);
+
+  // Calculate total acceleration magnitude
+  float magnitude = sqrt(ax * ax + ay * ay + az * az);
+
+  // Get smoothed magnitude using moving average
+  float smoothedMagnitude = getAverageMagnitude(magnitude);
+
+  // Classify pace and print status to Serial
+  if (smoothedMagnitude < threshold_stationary) {
+    pace = "Stationary";
+    Serial.println("Pace Status: STATIONARY ");
+  }
+  else if (smoothedMagnitude <= threshold_walking) {
+    pace = "Walking";
+    Serial.println("Pace Status: WALKING ");
+  }
+  else {
+    pace = "Running";
+    Serial.println("Pace Status: RUNNING ");
+  }
+
+  // Print to Serial Monitor
+  Serial.print("Pace: ");
+  Serial.print(pace);
+  Serial.print(" | Magnitude: ");
+  Serial.print(magnitude, 2);  // Raw magnitude
+  Serial.print(" | Smoothed: ");
+  Serial.println(smoothedMagnitude, 2);  // Smoothed magnitude
+
+  delay(100);  // Refresh rate
+}
+
+i

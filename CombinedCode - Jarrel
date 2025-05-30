@@ -1,0 +1,243 @@
+#include <Wire.h>
+#include <math.h>
+
+// ADXL335 analog output pins
+const int xPin = A0;
+const int yPin = A1;
+const int zPin = A2;
+const int ST_PIN = 4; // Self-test control pin (connected to gate of P-MOSFET)
+const int buttonPin = 2; // Calibration button pin
+
+// Constants for ADXL335
+const float ZERO_G_VOLTAGE = 1.65;    // Voltage at 0g
+const float SENSITIVITY = 0.330;      // V/g sensitivity
+const float ADC_REF = 5.0;            // ADC reference voltage
+const int ADC_MAX = 1023;             // 10-bit ADC
+
+// Calibration data
+int calibrationData[6][3]; // 6 directions, 3-axis each
+const char* directions[6] = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"};
+
+// Step detection parameters
+const float STEP_THRESHOLD = 1.5;     // Acceleration magnitude threshold for step detection (in g)
+const int MIN_STEP_INTERVAL = 200;    // Minimum time between steps (ms) to avoid false positives
+const int WINDOW_SIZE = 10;           // Number of readings for moving average
+
+// Walking pace thresholds in g
+const float THRESHOLD_STATIONARY = 4.0;
+const float THRESHOLD_WALKING = 5.0;
+
+// Variables for step counting
+float magnitudeHistory[WINDOW_SIZE];  // Array for moving average of magnitude
+int historyIndex = 0;                 // Current index in history array
+float magnitudeSum = 0.0;             // Sum of magnitudes in history
+unsigned long lastStepTime = 0;       // Time of last detected step
+int stepCount = 0;                    // Total steps counted
+String pace = "Stationary";
+
+void setup() {
+  Serial.begin(9600);  // Start Serial Monitor
+  pinMode(ST_PIN, OUTPUT);
+  pinMode(buttonPin, INPUT);
+  digitalWrite(ST_PIN, HIGH); // Keep P-MOSFET OFF initially (ST inactive)
+
+  // Run self-test
+  runSelfTest();
+
+  // Perform calibration
+  calibrateAccelerometer();
+
+  // Initialize magnitude history array
+  for (int i = 0; i < WINDOW_SIZE; i++) {
+    magnitudeHistory[i] = 0.0;
+  }
+
+  Serial.println("Step Counter and Pace Tracker Started");
+  Serial.println("Begin walking to count steps and detect pace...");
+  delay(2000);
+}
+
+float readAccel(int pin) {
+  int raw = analogRead(pin);
+  float voltage = (raw * ADC_REF) / ADC_MAX;
+  float accel = (voltage - ZERO_G_VOLTAGE) / SENSITIVITY;
+  return accel;
+}
+
+void runSelfTest() {
+  float x_initial, y_initial, z_initial;
+  float x_test, y_test, z_test;
+  float deltaX, deltaY, deltaZ;
+
+  Serial.println("Start Self-Test");
+  delay(1000);
+
+  // Read baseline acceleration
+  x_initial = readAccel(xPin);
+  y_initial = readAccel(yPin);
+  z_initial = readAccel(zPin);
+
+  Serial.println("Initial Acceleration (g):");
+  Serial.print("X: "); Serial.println(x_initial, 2);
+  Serial.print("Y: "); Serial.println(y_initial, 2);
+  Serial.print("Z: "); Serial.println(z_initial, 2);
+
+  if (abs(x_initial) > 2 || abs(y_initial) > 3 || abs(z_initial) > 5) {
+    Serial.println("Sensor Error");
+    while (true) delay(1000);
+  }
+
+  // Activate self-test (P-MOSFET: gate LOW → ST pin HIGH)
+  digitalWrite(ST_PIN, LOW);
+  delay(500); // Let self-test stabilize
+
+  x_test = readAccel(xPin);
+  y_test = readAccel(yPin);
+  z_test = readAccel(zPin);
+
+  // Deactivate self-test
+  digitalWrite(ST_PIN, HIGH);
+
+  // Compute delta values
+  deltaX = x_test - x_initial;
+  deltaY = y_test - y_initial;
+  deltaZ = z_test - z_initial;
+
+  Serial.println("Self-Test Delta (g):");
+  Serial.print("ΔX: "); Serial.println(deltaX, 2);
+  Serial.print("ΔY: "); Serial.println(deltaY, 2);
+  Serial.print("ΔZ: "); Serial.println(deltaZ, 2);
+
+  // Expected changes: ΔX = -1.08g, ΔY = +1.08g, ΔZ = +1.83g
+  bool pass = (abs(deltaX + 1.08) < 0.5) && (abs(deltaY - 1.08) < 0.5) && (abs(deltaZ - 1.83) < 0.7);
+
+  if (pass) {
+    Serial.println("Self-Test Passed");
+  } else {
+    Serial.println("Self-Test Failed");
+  }
+
+  while (false) delay(1000); // Removed infinite loop to proceed after self-test
+}
+
+void calibrateAccelerometer() {
+  Serial.println("Press button to");
+  Serial.println("start Calibrate");
+
+  waitForButtonPress();
+
+  for (int i = 0; i < 6; i++) {
+    Serial.print("Place on surface, Direction: ");
+    Serial.println(directions[i]);
+    Serial.println("Press button when ready to calibrate...");
+
+    // Wait for button press before calibrating each direction
+    waitForButtonPress();
+
+    int x, y, z;
+    calibrate(&x, &y, &z);
+    calibrationData[i][0] = x;
+    calibrationData[i][1] = y;
+    calibrationData[i][2] = z;
+
+    Serial.print("Direction ");
+    Serial.print(directions[i]);
+    Serial.print(": ");
+    Serial.print("X=");
+    Serial.print(x);
+    Serial.print(" Y=");
+    Serial.print(y);
+    Serial.print(" Z=");
+    Serial.println(z);
+  }
+
+  Serial.println("Calibration");
+  Serial.println("Successful!");
+  Serial.println("Calibration Successful");
+}
+
+void calibrate(int* _x, int* _y, int* _z) {
+  int x, y, z;
+  int sum_x = 0, sum_y = 0, sum_z = 0;
+  int samples = 10;
+
+  for (int i = 0; i < samples; i++) {
+    x = (int)(readAccel(xPin) * 100); // Convert to integer for storage
+    y = (int)(readAccel(yPin) * 100);
+    z = (int)(readAccel(zPin) * 100);
+    sum_x += x;
+    sum_y += y;
+    sum_z += z;
+    delay(10);
+  }
+
+  *_x = sum_x / samples;
+  *_y = sum_y / samples;
+  *_z = sum_z / samples;
+}
+
+void waitForButtonPress() {
+  Serial.println("Waiting for button press...");
+  while (digitalRead(buttonPin) == LOW) {
+    delay(100);
+  }
+  delay(500); // Debounce
+  Serial.println("Button pressed!");
+  while (digitalRead(buttonPin) == HIGH) {
+    delay(100);
+  }
+}
+
+float getAverageMagnitude(float newMagnitude) {
+  magnitudeSum -= magnitudeHistory[historyIndex];
+  magnitudeHistory[historyIndex] = newMagnitude;
+  magnitudeSum += newMagnitude;
+  historyIndex = (historyIndex + 1) % WINDOW_SIZE;
+  return magnitudeSum / WINDOW_SIZE;
+}
+
+void loop() {
+  // Read acceleration in g
+  float ax = readAccel(xPin);
+  float ay = readAccel(yPin);
+  float az = readAccel(zPin);
+
+  // Calculate total acceleration magnitude
+  float magnitude = sqrt(ax * ax + ay * ay + az * az);
+
+  // Get smoothed magnitude using moving average
+  float smoothedMagnitude = getAverageMagnitude(magnitude);
+
+  // Detect a step
+  unsigned long currentTime = millis();
+  if (smoothedMagnitude > STEP_THRESHOLD && (currentTime - lastStepTime) > MIN_STEP_INTERVAL) {
+    stepCount++;
+    lastStepTime = currentTime;
+    Serial.print("Step Detected! Total Steps: ");
+    Serial.println(stepCount);
+  }
+
+  // Classify walking pace
+  if (smoothedMagnitude < THRESHOLD_STATIONARY) {
+    pace = "Stationary";
+    Serial.println("Pace Status: STATIONARY DETECTED");
+  } else if (smoothedMagnitude <= THRESHOLD_WALKING) {
+    pace = "Walking";
+    Serial.println("Pace Status: WALKING DETECTED");
+  } else {
+    pace = "Running";
+    Serial.println("Pace Status: RUNNING DETECTED");
+  }
+
+  // Print current data to Serial Monitor
+  Serial.print("Magnitude: ");
+  Serial.print(magnitude, 2);
+  Serial.print(" | Smoothed: ");
+  Serial.print(smoothedMagnitude, 2);
+  Serial.print(" | Steps: ");
+  Serial.print(stepCount);
+  Serial.print(" | Pace: ");
+  Serial.println(pace);
+
+  delay(100);  // Refresh rate
+}

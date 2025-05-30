@@ -1,0 +1,88 @@
+#include <math.h>
+
+// ADXL335 analog output pins
+const int xPin = A0;
+const int yPin = A1;
+const int zPin = A2;
+
+// Constants for ADXL335
+const float ZERO_G_VOLTAGE = 1.65;    // Voltage at 0g
+const float SENSITIVITY = 0.330;      // V/g sensitivity
+const float ADC_REF = 5.0;            // ADC reference voltage
+const int ADC_MAX = 1023;             // 10-bit ADC
+
+// Step detection parameters
+const float THRESHOLD = 5;          // Acceleration magnitude threshold for step detection (in g)
+const int MIN_STEP_INTERVAL = 200;    // Minimum time between steps (ms) to avoid false positives
+const int WINDOW_SIZE = 10;           // Number of readings for moving average
+
+// Variables for step counting
+float magnitudeHistory[WINDOW_SIZE];  // Array for moving average of magnitude
+int historyIndex = 0;                 // Current index in history array
+float magnitudeSum = 0.0;             // Sum of magnitudes in history
+unsigned long lastStepTime = 0;       // Time of last detected step
+int stepCount = 0;                    // Total steps counted
+
+void setup() {
+  Serial.begin(9600);  // Start Serial Monitor
+
+  // Initialize magnitude history array
+  for (int i = 0; i < WINDOW_SIZE; i++) {
+    magnitudeHistory[i] = 0.0;
+  }
+
+  Serial.println("Step Counter Started");
+  Serial.println("Begin walking to count steps...");
+  delay(2000);
+}
+
+float readAccel(int pin) {
+  int raw = analogRead(pin);
+  float voltage = (raw * ADC_REF) / ADC_MAX;
+  float accel = (voltage - ZERO_G_VOLTAGE) / SENSITIVITY;
+  return accel;
+}
+
+float getAverageMagnitude(float newMagnitude) {
+  // Subtract the oldest magnitude from the sum
+  magnitudeSum -= magnitudeHistory[historyIndex];
+  // Add the new magnitude to the history
+  magnitudeHistory[historyIndex] = newMagnitude;
+  magnitudeSum += newMagnitude;
+  // Move to the next index, wrap around if necessary
+  historyIndex = (historyIndex + 1) % WINDOW_SIZE;
+  // Return the average
+  return magnitudeSum / WINDOW_SIZE;
+}
+
+void loop() {
+  // Read acceleration in g
+  float ax = readAccel(xPin);
+  float ay = readAccel(yPin);
+  float az = readAccel(zPin);
+
+  // Calculate total acceleration magnitude
+  float magnitude = sqrt(ax * ax + ay * ay + az * az);
+
+  // Get smoothed magnitude using moving average
+  float smoothedMagnitude = getAverageMagnitude(magnitude);
+
+  // Detect a step: check if smoothed magnitude exceeds threshold and enough time has passed
+  unsigned long currentTime = millis();
+  if (smoothedMagnitude > THRESHOLD && (currentTime - lastStepTime) > MIN_STEP_INTERVAL) {
+    stepCount++;
+    lastStepTime = currentTime;
+    Serial.print("Step Detected! Total Steps: ");
+    Serial.println(stepCount);
+  }
+
+  // Print current data to Serial Monitor
+  Serial.print("Magnitude: ");
+  Serial.print(magnitude, 2);  // Raw magnitude
+  Serial.print(" | Smoothed: ");
+  Serial.print(smoothedMagnitude, 2);  // Smoothed magnitude
+  Serial.print(" | Steps: ");
+  Serial.println(stepCount);
+
+  delay(100);  // Refresh rate
+}

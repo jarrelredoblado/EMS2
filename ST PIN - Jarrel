@@ -1,0 +1,104 @@
+#include <Wire.h>
+//#include <LiquidCrystal_I2C.h>
+
+// Pin definitions
+const int X_PIN = A0;
+const int Y_PIN = A1;
+const int Z_PIN = A2;
+const int ST_PIN = 4; // Self-test control pin (connected to gate of P-MOSFET)
+
+// Constants for ADXL335
+const float ZERO_G_VOLTAGE = 1.65;    // Midpoint voltage at 0g
+const float SENSITIVITY = 0.330;      // 330 mV/g
+const float ADC_REF = 5.0;            // Arduino ADC reference voltage
+const int ADC_MAX = 1023;             // 10-bit ADC
+
+//LiquidCrystal_I2C lcd(0x27, 16, 2); // LCD: 0x27, 16x2
+
+void setup() {
+  Serial.begin(9600);
+  //lcd.init();         // Corrected initialization
+  //lcd.backlight();
+
+  pinMode(ST_PIN, OUTPUT);
+  digitalWrite(ST_PIN, HIGH); // Keep P-MOSFET OFF initially (ST inactive)
+
+  delay(500);
+  runSelfTest();
+}
+
+void loop() {
+  // Do nothing – test runs once at boot
+}
+
+float readAxis(int pin) {
+  int raw = analogRead(pin);
+  float voltage = (raw * ADC_REF) / ADC_MAX;
+  float accel = (voltage - ZERO_G_VOLTAGE) / SENSITIVITY;
+  return accel;
+}
+
+void runSelfTest() {
+  float x_initial, y_initial, z_initial;
+  float x_test, y_test, z_test;
+  float deltaX, deltaY, deltaZ;
+
+  //lcd.clear();
+  //lcd.print("Start Self-Test");
+  delay(1000);
+
+  // Read baseline acceleration
+  x_initial = readAxis(X_PIN);
+  y_initial = readAxis(Y_PIN);
+  z_initial = readAxis(Z_PIN);
+
+  Serial.println("Initial Acceleration (g):");
+  Serial.print("X: "); Serial.println(x_initial, 2);
+  Serial.print("Y: "); Serial.println(y_initial, 2);
+  Serial.print("Z: "); Serial.println(z_initial, 2);
+
+  if (abs(x_initial) > 2 || abs(y_initial) > 3 || abs(z_initial) > 5) {
+    //lcd.clear();
+    //lcd.print("Sensor Error");
+    while (true) delay(1000);
+  }
+
+  // Activate self-test (P-MOSFET: gate LOW → ST pin HIGH)
+  digitalWrite(ST_PIN, LOW);
+  delay(500); // Let self-test stabilize
+
+  x_test = readAxis(X_PIN);
+  y_test = readAxis(Y_PIN);
+  z_test = readAxis(Z_PIN);
+
+  // Deactivate self-test
+  digitalWrite(ST_PIN, HIGH);
+
+  // Compute delta values
+  deltaX = x_test - x_initial;
+  deltaY = y_test - y_initial;
+  deltaZ = z_test - z_initial;
+
+  Serial.println("Self-Test Delta (g):");
+  Serial.print("ΔX: "); Serial.println(deltaX, 2);
+  Serial.print("ΔY: "); Serial.println(deltaY, 2);
+  Serial.print("ΔZ: "); Serial.println(deltaZ, 2);
+
+  // Use YOUR expected signs: ΔX = -1.08, ΔY = +1.08, ΔZ = +1.83
+  bool pass =
+    (abs(deltaX + 1.08) < 0.4) &&
+    (abs(deltaY - 1.08) < 0.4) &&
+    (abs(deltaZ - 1.83) < 0.7);
+
+  // Display result
+  //lcd.clear();
+  if (pass) {
+    Serial.print("Self-Test Passed");
+  } else {
+    Serial.print("Self-Test Failed");
+    //lcd.setCursor(0, 1);
+    //lcd.print("Check Sensor");
+  }
+
+  while (true) delay(1000); // Freeze result on screen
+}

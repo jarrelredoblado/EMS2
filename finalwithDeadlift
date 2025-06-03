@@ -1,0 +1,394 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// LCD setup (address 0x27, 16 columns x 2 rows)
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// Pins
+const int xPin = A0;
+const int yPin = A1;
+const int zPin = A2;
+const int ST_PIN = 4;        // Self-test control pin
+const int buttonPin = 2;     // Calibration button pin
+
+// Calibration variables
+const char* directions[6] = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"};
+float calibrationData[6][3];  // Stores raw readings per calibration step
+int calibStep = 0;
+
+// State machine
+enum State { SELF_TEST, CALIBRATION, STEPS, DEADLIFT };
+State currentState = SELF_TEST;
+
+// Button press tracking variables for waitForButtonPress()
+bool pressed = false;
+unsigned long pressStartTime = 0;
+const unsigned long maxPressDuration = 800;  // ms
+
+// Button toggle tracking
+bool lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 50;
+
+// Calibration constants (can be updated after calibration)
+float ZERO_G_VOLTAGE_X = 2.08;
+float ZERO_G_VOLTAGE_Y = 2.47;
+float ZERO_G_VOLTAGE_Z = 3.00;
+
+const float SENSITIVITY = 0.300;
+const float ADC_REF = 5.0;
+const int ADC_MAX = 1023;
+
+// Step detection parameters
+const float STEP_PEAK_THRESHOLD = 2.0;
+const float STEP_VALLEY_THRESHOLD = 1.5;
+const int MIN_STEP_INTERVAL = 300;
+
+// Moving average smoothing variables for magnitude
+const int WINDOW_SIZE = 10;
+float magnitudeHistory[WINDOW_SIZE];
+int historyIndex = 0;
+float magnitudeSum = 0.0;
+
+// Step detection variables
+unsigned long lastStepTime = 0;
+int stepCount = 0;
+bool stepDetected = false;
+unsigned long stepDetectedTime = 0;
+const unsigned long STEP_DETECT_TIMEOUT = 1000;
+
+// Function prototypes
+void waitForButtonPress();
+void runSelfTest();
+void runCalibration();
+void runStepsOrDeadlift();
+float readAccel(int pin, float zero_g_voltage);
+float readAccelMagnitude();
+float getSmoothedMagnitude(float newMagnitude);
+float readVoltage_mV(int pin);
+
+void setup() {
+  Serial.begin(9600);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+
+  pinMode(ST_PIN, OUTPUT);
+  pinMode(buttonPin, INPUT_PULLUP);
+  digitalWrite(ST_PIN, HIGH);
+
+  Serial.println("Starting Self-Test...");
+  lcd.setCursor(0, 0);
+  lcd.print("Starting");
+  lcd.setCursor(0, 1);
+  lcd.print("Self-Test...");
+  delay(2000);
+
+  runSelfTest();
+}
+
+void loop() {
+  // Button toggle logic
+  static bool buttonWasPressed = false;
+
+  int reading = digitalRead(buttonPin);
+  if (reading == LOW && !buttonWasPressed) {
+    buttonWasPressed = true;
+
+    if (currentState == STEPS) {
+      currentState = DEADLIFT;
+      lcd.clear();
+      delay(200);
+    } else if (currentState == DEADLIFT) {
+      currentState = STEPS;
+      lcd.clear();
+      delay(200);
+    }
+  } else if (reading == HIGH) {
+    buttonWasPressed = false;
+  }
+
+  // Run appropriate state
+  switch (currentState) {
+    case SELF_TEST:
+      // runSelfTest() already ran in setup
+      break;
+
+    case CALIBRATION:
+      runCalibration();
+      break;
+
+    case STEPS:
+    case DEADLIFT:
+      runStepsOrDeadlift();
+      break;
+  }
+}
+
+
+void runCalibration() {
+  static bool promptShown = false;
+
+  if (calibStep < 6) {
+    if (!promptShown) {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Calib:");
+      lcd.print(directions[calibStep]);
+      lcd.setCursor(0, 1);
+      lcd.print("Press Btn");
+
+      Serial.print("Place sensor in ");
+      Serial.println(directions[calibStep]);
+
+      promptShown = true;
+    }
+
+    waitForButtonPress();
+
+    calibrationData[calibStep][0] = analogRead(xPin);
+    calibrationData[calibStep][1] = analogRead(yPin);
+    calibrationData[calibStep][2] = analogRead(zPin);
+
+    Serial.print("Calibrated ");
+    Serial.print(directions[calibStep]);
+    Serial.print(": X=");
+    Serial.print(calibrationData[calibStep][0]);
+    Serial.print(" Y=");
+    Serial.print(calibrationData[calibStep][1]);
+    Serial.print(" Z=");
+    Serial.println(calibrationData[calibStep][2]);
+
+    calibStep++;
+    promptShown = false;
+  } else {
+    Serial.println("Calibration complete!");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Calibration");
+    lcd.setCursor(0, 1);
+    lcd.print("Complete");
+    delay(2000);
+    currentState = STEPS;
+
+    float initMagnitude = readAccelMagnitude();
+    for (int i = 0; i < WINDOW_SIZE; i++) {
+      magnitudeHistory[i] = initMagnitude;
+    }
+    magnitudeSum = initMagnitude * WINDOW_SIZE;
+
+    stepCount = 0;
+    lastStepTime = 0;
+    stepDetected = false;
+  }
+}
+
+void runStepsOrDeadlift() {
+  float accelX = readAccel(xPin, ZERO_G_VOLTAGE_X);
+  float accelY = readAccel(yPin, ZERO_G_VOLTAGE_Y);
+  float accelZ = readAccel(zPin, ZERO_G_VOLTAGE_Z);
+  float magnitude = sqrt(accelX * accelX + accelY * accelY + accelZ * accelZ);
+  float smoothedMagnitude = getSmoothedMagnitude(magnitude);
+
+  unsigned long currentTime = millis();
+  static int lastStepCount = 0;
+  bool stepsIncreasing = (stepCount > lastStepCount);
+
+  // Step detection logic
+  if (!stepDetected && smoothedMagnitude > STEP_PEAK_THRESHOLD && (currentTime - lastStepTime) > MIN_STEP_INTERVAL) {
+    stepCount++;
+    lastStepTime = currentTime;
+    stepDetected = true;
+    stepDetectedTime = currentTime;
+    Serial.print("Step detected! Total steps: ");
+    Serial.println(stepCount);
+  }
+
+  if (stepDetected && smoothedMagnitude < STEP_VALLEY_THRESHOLD) {
+    stepDetected = false;
+    Serial.println("Step detection reset by valley");
+  }
+
+  if (stepDetected && (currentTime - stepDetectedTime > STEP_DETECT_TIMEOUT)) {
+    stepDetected = false;
+    Serial.println("Step detection reset by timeout");
+  }
+
+  lastStepCount = stepCount;
+
+  String modeStr = (currentState == STEPS) ? "Steps" : "Deadlift";
+
+  // Pace calculation only for STEPS mode
+  String pace = "";
+  if (currentState == STEPS) {
+    if (accelX > 2.5 || accelY > 2.1) {
+      pace = "Running";
+    } else if (stepsIncreasing || smoothedMagnitude > 2.0) {
+      pace = "Walking";
+    } else {
+      pace = "Stationary";
+    }
+  }
+
+  Serial.print(modeStr);
+  Serial.print(": ");
+  Serial.print(stepCount);
+  Serial.print(" | Smoothed: ");
+  Serial.print(smoothedMagnitude, 3);
+  if (currentState == STEPS) {
+    Serial.print(" | Pace: ");
+    Serial.print(pace);
+  }
+  Serial.println();
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(modeStr);
+  lcd.print(":");
+  lcd.print(stepCount);
+  lcd.print(" Sm:");
+  lcd.print(smoothedMagnitude, 2);
+  lcd.setCursor(0, 1);
+
+  if (currentState == STEPS) {
+    lcd.print("Pace:");
+    lcd.print(pace);
+  } else {
+    lcd.print("                "); // blank line for DEADLIFT mode
+  }
+
+  delay(100);
+}
+
+void waitForButtonPress() {
+  Serial.println("Waiting for button press...");
+  pressed = false;
+
+  while (!pressed) {
+    int buttonState = digitalRead(buttonPin); // LOW when pressed
+
+    if (!pressed && buttonState == HIGH) { // Button pressed (LOW)
+      pressed = true;
+      pressStartTime = millis();
+      Serial.println("Button Pressed!");
+    }
+
+    if (pressed) {
+      if (buttonState == LOW || (millis() - pressStartTime >= maxPressDuration)) {
+        pressed = false;
+        Serial.println("Button Released / Timeout");
+        delay(50); // small debounce delay before exit
+        break; // exit wait loop
+      }
+    }
+    delay(20);
+  }
+}
+
+void runSelfTest() {
+  float x_initial_mV, y_initial_mV, z_initial_mV;
+  float x_test_mV, y_test_mV, z_test_mV;
+  float deltaX_mV, deltaY_mV, deltaZ_mV;
+
+  delay(1000);
+
+  x_initial_mV = readVoltage_mV(xPin);
+  y_initial_mV = readVoltage_mV(yPin);
+  z_initial_mV = readVoltage_mV(zPin);
+
+  Serial.print("Initial Voltage (mV): X=");
+  Serial.print(x_initial_mV);
+  Serial.print(" Y=");
+  Serial.print(y_initial_mV);
+  Serial.print(" Z=");
+  Serial.println(z_initial_mV);
+
+  lcd.clear();
+
+  digitalWrite(ST_PIN, LOW);
+  delay(500);
+
+  x_test_mV = readVoltage_mV(xPin);
+  y_test_mV = readVoltage_mV(yPin);
+  z_test_mV = readVoltage_mV(zPin);
+
+  digitalWrite(ST_PIN, HIGH);
+
+  Serial.print("Self-Test Voltage (mV): X=");
+  Serial.print(x_test_mV);
+  Serial.print(" Y=");
+  Serial.print(y_test_mV);
+  Serial.print(" Z=");
+  Serial.println(z_test_mV);
+
+  lcd.clear();
+
+  deltaX_mV = x_test_mV - x_initial_mV;
+  deltaY_mV = y_test_mV - y_initial_mV;
+  deltaZ_mV = z_test_mV - z_initial_mV;
+
+  const float expectedDeltaX = -325.0;
+  const float expectedDeltaY = 325.0;
+  const float expectedDeltaZ = 550.0;
+
+  const float toleranceX = 225.0;
+  const float toleranceY = 225.0;
+  const float toleranceZ = 425.0;
+
+  bool pass =
+    (abs(deltaX_mV - expectedDeltaX) < toleranceX) &&
+    (abs(deltaY_mV - expectedDeltaY) < toleranceY) &&
+    (abs(deltaZ_mV - expectedDeltaZ) < toleranceZ);
+
+  if (pass) {
+    Serial.println("Self-Test Passed");
+    lcd.setCursor(0, 0);
+    lcd.print("Self-Test");
+    lcd.setCursor(0, 1);
+    lcd.print("Passed");
+    delay(3000);
+    currentState = CALIBRATION;
+  } else {
+    Serial.println("Self-Test Failed");
+    lcd.setCursor(0, 0);
+    lcd.print("Self-Test");
+    lcd.setCursor(0, 1);
+    lcd.print("Failed");
+    while (true) delay(1000);
+  }
+}
+
+float readVoltage_mV(int pin) {
+  int raw = analogRead(pin);
+  float voltage = (raw * ADC_REF) / ADC_MAX;
+  return voltage * 1000.0;
+}
+
+float readAxis(int pin, float zero_g_voltage) {
+  int raw = analogRead(pin);
+  float voltage = (raw * ADC_REF) / ADC_MAX;
+  return (voltage - zero_g_voltage) / SENSITIVITY;
+}
+
+float readAccel(int pin, float zero_g_voltage) {
+  int raw = analogRead(pin);
+  float voltage = (raw * ADC_REF) / ADC_MAX;
+  float accel = (voltage - zero_g_voltage) / SENSITIVITY;
+  return accel;
+}
+
+float readAccelMagnitude() {
+  float ax = readAccel(xPin, ZERO_G_VOLTAGE_X);
+  float ay = readAccel(yPin, ZERO_G_VOLTAGE_Y);
+  float az = readAccel(zPin, ZERO_G_VOLTAGE_Z);
+  return sqrt(ax * ax + ay * ay + az * az);
+}
+
+float getSmoothedMagnitude(float newMagnitude) {
+  magnitudeSum -= magnitudeHistory[historyIndex];
+  magnitudeHistory[historyIndex] = newMagnitude;
+  magnitudeSum += newMagnitude;
+  historyIndex = (historyIndex + 1) % WINDOW_SIZE;
+  return magnitudeSum / WINDOW_SIZE;
+}
